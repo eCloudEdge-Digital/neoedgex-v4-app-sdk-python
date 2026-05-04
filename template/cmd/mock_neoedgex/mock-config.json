@@ -1,0 +1,55 @@
+{
+  "nodes": [
+    {
+      "id": "custom-httpclient-env-node",
+      "type": "app",
+      "data": {
+        "name": "custom-httpclient-env-node",
+        "inputs": {
+          "input1": [
+            {
+              "key": "temperature",
+              "type": "int64",
+              "format": "int64"
+            }
+          ]
+        },
+        "outputs": {
+          "output1": [
+            {
+              "key": "temperature",
+              "type": "int64",
+              "format": "int64"
+            },
+            {
+              "key": "response_status",
+              "type": "int64",
+              "format": "int64"
+            }
+          ]
+        },
+        "application": {
+          "key": "example-app",
+          "version": "1.0.0"
+        },
+        "settings": {}
+      }
+    }
+  ],
+  "mock": {
+    "messageInterval": "1s",
+    "messages": [
+      {
+        "nodeID": "custom-httpclient-env-node",
+        "handle": "input1",
+        "data": {
+          "temperature": {
+            "type": "int64",
+            "format": "int64",
+            "value": "25"
+          }
+        }
+      }
+    ]
+  }
+}

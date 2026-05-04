@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1.7
+
+FROM python:3.13-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1
+
+WORKDIR /build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY template/pyproject.toml /build/template/pyproject.toml
+COPY template/src /build/template/src
+
+RUN mkdir -p -m 0700 /root/.ssh \
+    && ssh-keyscan github.com >> /root/.ssh/known_hosts
+
+# Temporary until the SDK is publicly available: mount a private key that can
+# read the private GitHub SDK repository only for this wheel-build step.
+RUN --mount=type=secret,id=ssh_key \
+    cp /run/secrets/ssh_key /root/.ssh/github_key \
+    && chmod 0600 /root/.ssh/github_key \
+    && python -m pip install --upgrade pip \
+    && GIT_SSH_COMMAND="ssh -i /root/.ssh/github_key -o IdentitiesOnly=yes" \
+        python -m pip wheel --wheel-dir /wheels "neoedgex-app-sdk-python-v4 @ git+ssh://git@github.com/eCloudEdge-Digital/neoedgex-app-sdk-python-v4.git" /build/template \
+    && rm -f /root/.ssh/github_key
+
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /opt/example-app
+
+COPY --from=builder /wheels /wheels
+COPY template/cmd /opt/template/cmd
+
+RUN python -m pip install --no-index --find-links=/wheels neoedgex-python-template \
+    && rm -rf /wheels
+
+ENTRYPOINT ["python", "/opt/template/cmd/general/main.py"]

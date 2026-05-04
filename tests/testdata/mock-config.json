@@ -1,0 +1,51 @@
+{
+  "nodes": [
+    {
+      "id": "test-node-1",
+      "type": "app",
+      "data": {
+        "name": "demo-node",
+        "description": "demo",
+        "inputs": {
+          "input1": [
+            {
+              "key": "temperature",
+              "type": "double",
+              "format": "double"
+            }
+          ]
+        },
+        "outputs": {
+          "output1": [
+            {
+              "key": "result",
+              "type": "double",
+              "format": "double"
+            }
+          ]
+        },
+        "application": {
+          "key": "demo",
+          "version": "1.0.0"
+        },
+        "settings": {}
+      }
+    }
+  ],
+  "mock": {
+    "messageInterval": "1s",
+    "messages": [
+      {
+        "nodeID": "test-node-1",
+        "handle": "input1",
+        "data": {
+          "temperature": {
+            "type": "double",
+            "format": "double",
+            "value": "2.55e+01"
+          }
+        }
+      }
+    ]
+  }
+}

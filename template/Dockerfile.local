@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1.7
+
+FROM python:3.13-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1
+
+WORKDIR /build
+
+COPY pyproject.toml README.md /build/sdk/
+COPY src /build/sdk/src
+
+COPY template/pyproject.toml /build/template/pyproject.toml
+COPY template/src /build/template/src
+
+RUN python -m pip install --upgrade pip \
+    && python -m pip wheel --wheel-dir /wheels /build/sdk /build/template
+
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /opt/example-app
+
+COPY --from=builder /wheels /wheels
+COPY template/cmd /opt/template/cmd
+
+RUN python -m pip install --no-index --find-links=/wheels neoedgex-python-template \
+    && rm -rf /wheels
+
+ENTRYPOINT ["python", "/opt/template/cmd/general/main.py"]

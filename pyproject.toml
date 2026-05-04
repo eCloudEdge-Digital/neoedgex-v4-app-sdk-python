@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69", "wheel", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neoedgex-v4-app-sdk-python"
+dynamic = ["version"]
+description = "Python SDK for building NeoEdgeX node applications"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "paho-mqtt==2.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0,<9",
+]
+
+[tool.setuptools_scm]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
