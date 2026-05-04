@@ -121,7 +121,7 @@ Input schema describes which fields your handler expects to read from `ctx.messa
 
 When you adjust the input schema, you are changing which keys the SDK will decode into `neoedgex.Message.data` for that handle. The keys your handler reads should stay aligned with this definition, and the resulting Python value type comes from the SDK's decode result.
 
-<img width="200" height="102" src="https://github.com/user-attachments/assets/0f9f1034-acc8-43bb-a850-5f73f2dc3886" />
+<img width="200" height="102" src="./assets/node-input-config.png" />
 
 ### Output Schema
 
@@ -149,7 +149,7 @@ This schema controls how `ctx.publish({...})` is validated and converted:
 
 If you add, remove, or rename output fields here, update your `ctx.publish(...)` call to match.
 
-<img width="200" height="87" src="https://github.com/user-attachments/assets/a2810bb6-3342-4566-80bb-388a858c48c8" />
+<img width="200" height="87" src="./assets/node-output-config.png" />
 
 ### Settings
 
@@ -329,7 +329,7 @@ Important runtime terms:
 - `node`: one NeoEdgeX node configuration matched to your app
 - `handle`: an input or output port name such as `input1` or `output1`
 - `mock mode`: a local SDK mode that injects synthetic messages without a live platform
-<img width="200" height="61"  src="https://github.com/user-attachments/assets/9f8d53be-ddac-46a8-8314-f3bd0b216eda" />
+<img width="200" height="61"  src="./assets/node-diagram.png" />
 
 ### NodeEnv and Message
 
