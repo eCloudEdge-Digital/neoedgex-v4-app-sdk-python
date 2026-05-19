@@ -28,6 +28,12 @@ class NoopLogger:
 
 
 @dataclass(slots=True)
+class PublishedMessage:
+    handle: str
+    data: dict[str, Any]
+
+
+@dataclass(slots=True)
 class ReportedError:
     code: ErrorCode
     err: BaseException | None
@@ -49,7 +55,7 @@ class MockNodeEnv:
         self.mock_logger = mock_logger or NoopLogger()
         self.publish_error = publish_error
 
-        self.published_data: list[dict[str, Any]] = []
+        self.published_data: list[PublishedMessage] = []
         self.reported_errors: list[ReportedError] = []
         self.stop_called = False
 
@@ -65,8 +71,8 @@ class MockNodeEnv:
     def logger(self) -> Logger:
         return self.mock_logger
 
-    def publish(self, data: dict[str, Any]) -> None:
-        self.published_data.append(data)
+    def publish(self, handle: str, data: dict[str, Any]) -> None:
+        self.published_data.append(PublishedMessage(handle=handle, data=data))
         if self.publish_error is not None:
             raise self.publish_error
 
@@ -78,4 +84,4 @@ class MockNodeEnv:
         self.done_event.set()
 
 
-__all__ = ["MockNodeEnv", "NoopLogger", "ReportedError"]
+__all__ = ["MockNodeEnv", "NoopLogger", "PublishedMessage", "ReportedError"]

@@ -9,7 +9,6 @@ from typing import Any, Callable
 
 from neoedgex.contract import ErrorCode, Event, Message, NeoFlowMessage, Node, PortFieldData
 
-DEFAULT_OUTPUT_HANDLE = "output1"
 _MESSAGE_CLOSED = object()
 
 
@@ -84,11 +83,11 @@ class NodeInstance:
     def logger(self) -> Any:
         return self._logger
 
-    def publish(self, data: dict[str, Any]) -> None:
-        desired_output = self._node_config.data.outputs.get(DEFAULT_OUTPUT_HANDLE)
+    def publish(self, handle: str, data: dict[str, Any]) -> None:
+        desired_output = self._node_config.data.outputs.get(handle)
         if desired_output is None:
             raise ValueError(
-                f"output handle '{DEFAULT_OUTPUT_HANDLE}' does not exist for node {self._node_config.data.name}"
+                f"output handle '{handle}' does not exist for node {self._node_config.data.name}"
             )
 
         defined_keys = {field_def.key for field_def in desired_output}
@@ -118,7 +117,7 @@ class NodeInstance:
             timestamp=_now_rfc3339(),
             data=port_fields,
         )
-        topic = f"neoedgex/neoflow/out/{self._node_config.id}/{DEFAULT_OUTPUT_HANDLE}"
+        topic = f"neoedgex/neoflow/out/{self._node_config.id}/{handle}"
         self._sdk.messenger().publish(topic, 2, json.dumps(message.to_dict()).encode("utf-8"))
 
     def report_error(self, code: ErrorCode, err: BaseException | None) -> None:

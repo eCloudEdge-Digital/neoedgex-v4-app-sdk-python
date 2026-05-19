@@ -144,7 +144,7 @@ def make_node() -> Node:
 def test_publish_output_topic_and_payload_shape() -> None:
     messenger = FakeMessenger()
     instance = NodeInstance(FakeSDK(messenger), make_node())
-    instance.publish({"value": 7})
+    instance.publish("output1", {"value": 7})
     assert messenger.published[0].topic == "neoedgex/neoflow/out/node-1/output1"
     assert messenger.published[0].qos == 2
 
@@ -157,7 +157,7 @@ def test_publish_output_topic_and_payload_shape() -> None:
 def test_publish_fills_missing_output_field_with_empty_field() -> None:
     messenger = FakeMessenger()
     instance = NodeInstance(FakeSDK(messenger), make_node())
-    instance.publish({"value": 7})
+    instance.publish("output1", {"value": 7})
     message = NeoFlowMessage.from_dict(json.loads(messenger.published[0].data.decode("utf-8")))
     assert message.data["status"].type == DataType.UNDEFINED
     assert message.data["status"].format == DataFormat.UNDEFINED
@@ -167,7 +167,7 @@ def test_publish_fills_missing_output_field_with_empty_field() -> None:
 def test_publish_treats_nil_field_value_as_empty_field() -> None:
     messenger = FakeMessenger()
     instance = NodeInstance(FakeSDK(messenger), make_node())
-    instance.publish({"value": None, "status": "ok"})
+    instance.publish("output1", {"value": None, "status": "ok"})
     message = NeoFlowMessage.from_dict(json.loads(messenger.published[0].data.decode("utf-8")))
     assert message.data["value"].type == DataType.UNDEFINED
     assert message.data["value"].format == DataFormat.UNDEFINED
@@ -486,7 +486,7 @@ def test_app_quickstart_style_handler_runs_in_mock_mode() -> None:
     class Handler:
         def handle(self, ctx) -> None:
             for msg in ctx.messages():
-                ctx.publish({"value": 7, "status": "ok"})
+                ctx.publish("output1", {"value": 7, "status": "ok"})
                 ctx._sdk.shutdown()
                 break
 
@@ -654,21 +654,21 @@ class _RecordingSDK(FakeSDK):
 def test_publish_warns_when_output_field_missing_from_data() -> None:
     sdk = _RecordingSDK(FakeMessenger())
     instance = NodeInstance(sdk, make_node())
-    instance.publish({"value": 7})
+    instance.publish("output1", {"value": 7})
     assert any("'status' not provided" in line for line in sdk.recording_logger.warns), sdk.recording_logger.warns
 
 
 def test_publish_warns_when_output_field_provided_as_nil() -> None:
     sdk = _RecordingSDK(FakeMessenger())
     instance = NodeInstance(sdk, make_node())
-    instance.publish({"value": None, "status": "ok"})
+    instance.publish("output1", {"value": None, "status": "ok"})
     assert any("'value' provided with nil value" in line for line in sdk.recording_logger.warns), sdk.recording_logger.warns
 
 
 def test_publish_warns_when_data_contains_tag_not_in_output_schema() -> None:
     sdk = _RecordingSDK(FakeMessenger())
     instance = NodeInstance(sdk, make_node())
-    instance.publish({"value": 7, "status": "ok", "extra": "x"})
+    instance.publish("output1", {"value": 7, "status": "ok", "extra": "x"})
     assert any("'extra' is not defined in the output schema" in line for line in sdk.recording_logger.warns), sdk.recording_logger.warns
 
 

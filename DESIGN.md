@@ -8,7 +8,7 @@ The SDK lets third-party developers build NeoEdgeX node applications in Python w
 
 - receive NeoFlow messages through `ctx.messages()`
 - read raw node configuration through `ctx.node_config()`
-- publish output through `ctx.publish(...)`
+- publish output through `ctx.publish(handle, ...)`
 - report platform-visible errors through `ctx.report_error(...)`
 
 The SDK owns the platform-facing shell:
@@ -65,11 +65,11 @@ Each matched node gets its own handler execution path. If the handler raises or 
 Topic compatibility is kept aligned with the Go SDK:
 
 - input subscribe: `neoedgex/neoflow/in/{nodeID}/+`
-- output publish: `neoedgex/neoflow/out/{nodeID}/output1`
+- output publish: `neoedgex/neoflow/out/{nodeID}/{handle}`
 - node error: `neoedgex/neoflow/error/{nodeID}`
 - heartbeat: `neoedgex/neoflow/heartbeat/{nodeID}`
 
-`ctx.publish(...)` uses the `output1` schema from the node config:
+`ctx.publish(handle, ...)` looks up the matching output schema from the node config:
 
 - missing keys are emitted as empty fields
 - explicitly provided `None` is emitted as an empty field
@@ -93,7 +93,7 @@ Behavior:
 
 ## Test Utility and Template
 
-`neoedgex.testutil.MockNodeEnv` is the public helper for handler unit tests. It can provide node config, message iterables, lifecycle cancellation, logger behavior, publish errors, and records published data, reported errors, and stop calls.
+`neoedgex.testutil.MockNodeEnv` is the public helper for handler unit tests. It can provide node config, message iterables, lifecycle cancellation, logger behavior, publish errors, and records published data, reported errors, and stop calls. Each publish call is recorded as a `PublishedMessage(handle, data)` so tests can assert which output handle was used.
 
 The `template/` project mirrors the public app shape at a practical Python level:
 

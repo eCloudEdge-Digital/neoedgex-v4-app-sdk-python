@@ -6,7 +6,7 @@ NeoEdgeX App SDK Python v4 is the Python SDK for building NeoEdgeX node applicat
 
 - receive upstream messages from NeoFlow through `ctx.messages()`
 - read node configuration through `ctx.node_config()`
-- publish downstream output through `ctx.publish(...)`
+- publish downstream output through `ctx.publish(handle, ...)`
 - report runtime errors through `ctx.report_error(...)`
 
 The SDK also handles platform-facing concerns such as node lifecycle, message transport integration, heartbeats, status reporting, shutdown handling, and mock-mode execution.
@@ -63,9 +63,10 @@ class ExampleApp:
         for _msg in ctx.messages():
             try:
                 ctx.publish(
+                    "output1",
                     {
                         "hello": "world",
-                    }
+                    },
                 )
             except Exception as err:
                 ctx.report_error(neoedgex.CodeProcessError, err)
@@ -111,9 +112,9 @@ Custom App input handles live under `config.data.inputs`. The most common shape 
 }
 ```
 
-Only `input1` is currently supported as an input handle, so `config.data.inputs` should define its schema under `input1` as the single supported entry point.
+You can define multiple input handles such as `input1`, `input2`, `input3`. The handler receives all input messages through the same `ctx.messages()` stream and dispatches by `msg.handle`.
 
-Input schema describes which fields your handler expects to read from `ctx.messages()`. Each field defines:
+Input schema describes which fields your handler expects to read from `ctx.messages()` for each handle. Each field defines:
 
 - `key`: the field name that will appear in `msg.data`
 - `type`: the coarse NeoFlow data category
@@ -138,11 +139,9 @@ Custom App output handles live under `config.data.outputs`. The most common shap
 }
 ```
 
-Only `output1` is currently supported as an output handle, so `config.data.outputs` should define its schema under `output1` as the single supported exit point.
+You can define multiple output handles, and the handler picks one per call via `ctx.publish(handle, {...})`. The schema under each output handle controls how that call is validated and converted:
 
-This schema controls how `ctx.publish({...})` is validated and converted:
-
-- your published dict keys should match the keys defined in `output1`
+- your published dict keys should match the keys defined in the chosen output handle
 - the destination `format` determines which Python values are accepted and how they are converted
 - omitted schema fields are filled with an empty field serialized as `type=""`, `format=""`, and `value=""`
 - explicit `None` values are also published as empty fields
@@ -341,7 +340,7 @@ Each handler receives a `neoedgex.NodeEnv`.
 - `messages()` to receive incoming `neoedgex.Message`
 - `context()` to get the lifecycle signal for this node, suitable for HTTP, DB, gRPC, worker loops, and other long-running work
 - `logger()` to get the SDK-provided node-scoped logger
-- `publish(data: dict[str, object])` to emit `output1`
+- `publish(handle: str, data: dict[str, object])` to emit on the specified output handle
 - `report_error(code, err)` to report platform-visible node errors
 - `stop()` to ask the SDK to stop this node, typically after the handler decides it cannot continue because of a fatal error
 
@@ -453,15 +452,46 @@ Treat `msg.data` with this fixed meaning:
 | `datetime` | `datetime.datetime` |
 | `base64` | `bytes` |
 
+### Dispatching Across Multiple Input Handles
+
+When the node defines more than one input handle, every inbound message still arrives on the same `ctx.messages()` stream — the handler tells them apart by `msg.handle`. A common pattern is to branch on `msg.handle`, prepare per-handle work, and publish to the appropriate output:
+
+```python
+import neoedgex
+
+
+class ExampleApp:
+    def handle(self, ctx: neoedgex.NodeEnv) -> None:
+        for msg in ctx.messages():
+            if msg.handle == "input1":
+                temperature = msg.data.get("temperature")
+                # ... handle input1 ...
+                ctx.publish("output1", {"api_path": "/temperature", "response_status": 200})
+            elif msg.handle == "input2":
+                running = msg.data.get("running")
+                # ... handle input2 ...
+                ctx.publish("output1", {"api_path": "/status", "response_status": 200})
+            elif msg.handle == "input3":
+                message = msg.data.get("message")
+                # ... handle input3 ...
+                ctx.publish("output1", {"api_path": "/event", "response_status": 200})
+            else:
+                # Unknown handle — ignore.
+                continue
+```
+
+The handle string passed to `ctx.publish(...)` must match a key in the node config's `outputs` map; otherwise the call raises.
+
 ### Publish Rules
 
 `publish` currently behaves like this:
 
-- it builds payloads against the node's `output1` schema
+- the first argument selects the output handle; the SDK builds the payload against the schema declared under that handle in the node config
+- if the handle is not defined in the node's `outputs`, the call raises
 - if an output field defined in schema is missing from your `data`, the SDK fills it with an empty field
 - if you explicitly provide a field with `None`, the SDK also turns it into an empty field
-- keys in your `data` dict that are not defined in the `output1` schema are silently ignored and will not appear in the published payload
-- `ctx.publish({...})` accepts ordinary Python values, and the handler also reads ordinary Python values from `msg.data`
+- keys in your `data` dict that are not defined in the chosen handle's schema are silently ignored and will not appear in the published payload
+- `ctx.publish(handle, {...})` accepts ordinary Python values, and the handler also reads ordinary Python values from `msg.data`
 
 Concrete example for missing output fields:
 
@@ -471,9 +501,10 @@ Concrete example for missing output fields:
 # - status: type=string, format=string
 
 ctx.publish(
+    "output1",
     {
         "power": 42.0,
-    }
+    },
 )
 ```
 
@@ -484,10 +515,11 @@ An omitted schema field is not dropped; it is published as an explicit empty fie
 ```python
 try:
     ctx.publish(
+        "output1",
         {
             "power": 42.0,
             "status": None,
-        }
+        },
     )
 except Exception as err:
     ctx.report_error(neoedgex.CodeProcessError, err)
@@ -497,7 +529,7 @@ This means you are explicitly publishing `status` as an empty field. Omitting `s
 
 ### Python Value Conversion
 
-When you publish output fields with `ctx.publish({...})`, conversion is controlled by the destination format defined in `output1`.
+When you publish output fields with `ctx.publish(handle, {...})`, conversion is controlled by the destination format defined in the chosen output handle's schema.
 
 <table>
   <thead>
@@ -656,9 +688,10 @@ If you publish this:
 
 ```python
 ctx.publish(
+    "output1",
     {
         "enabled": 9527,
-    }
+    },
 )
 ```
 
@@ -668,15 +701,16 @@ But if you publish this instead:
 
 ```python
 ctx.publish(
+    "output1",
     {
         "enabled": "true",
-    }
+    },
 )
 ```
 
 The SDK does not raise. Instead, it silently sets the field to an empty value and internally calls `report_error` to notify the platform.
 
-`publish` only raises in three cases: the `output1` schema does not exist, JSON serialisation fails, or the MQTT publish fails. Conversion failures are not surfaced through exceptions.
+`publish` only raises in three cases: the chosen output handle is not defined in the node config, JSON serialisation fails, or the MQTT publish fails. Conversion failures are not surfaced through exceptions.
 
 ### Publish Flow
 
@@ -690,7 +724,7 @@ Step 1: start from the `output1` schema. For this example, assume `output1` is:
 - capturedAt: type=string, format=datetime
 ```
 
-Step 2: the handler can publish ordinary Python values through `ctx.publish(...)`:
+Step 2: the handler can publish ordinary Python values through `ctx.publish(handle, ...)`:
 
 ```python
 from datetime import datetime
@@ -705,11 +739,12 @@ class ExampleApp:
 
             try:
                 ctx.publish(
+                    "output1",
                     {
                         "temperature": 25.5,
                         "running": True,
                         "capturedAt": datetime.now().astimezone(),
-                    }
+                    },
                 )
             except Exception as err:
                 ctx.report_error(neoedgex.CodeProcessError, err)
@@ -770,7 +805,7 @@ class ExampleApp:
     def handle(self, ctx: neoedgex.NodeEnv) -> None:
         for msg in ctx.messages():
             try:
-                ctx.publish({"value": "ok"})
+                ctx.publish("output1", {"value": "ok"})
             except Exception as err:
                 ctx.report_error(neoedgex.CodeProcessError, err)
 
@@ -837,10 +872,10 @@ Do not enable mock mode in production deployment.
 
 ## Unit Test Helper
 
-When unit-testing your own `NodeHandler`, use `neoedgex.testutil.MockNodeEnv` to create a test `NodeEnv`. It lets you set `config`, `message_iterable`, `done_event`, `mock_logger`, and `publish_error`, and records `published_data`, `reported_errors`, and `stop_called` after the handler runs.
+When unit-testing your own `NodeHandler`, use `neoedgex.testutil.MockNodeEnv` to create a test `NodeEnv`. It lets you set `config`, `message_iterable`, `done_event`, `mock_logger`, and `publish_error`, and records `published_data`, `reported_errors`, and `stop_called` after the handler runs. Each publish call is appended as a `PublishedMessage(handle, data)` so tests can assert which output handle was used.
 
 ```python
-from neoedgex.testutil import MockNodeEnv
+from neoedgex.testutil import MockNodeEnv, PublishedMessage
 
 ctx = MockNodeEnv(
     config=node_config,
@@ -849,7 +884,7 @@ ctx = MockNodeEnv(
 
 handler.handle(ctx)
 
-assert ctx.published_data
+assert ctx.published_data == [PublishedMessage(handle="output1", data={"value": "ok"})]
 ```
 
 Use this package only in tests. Production app entrypoints do not need to import `neoedgex.testutil`.

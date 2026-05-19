@@ -19,60 +19,107 @@ class ExampleApp:
             return
 
         for msg in ctx.messages():
-            if msg.handle != "input1":
+            # 範例：依 msg.handle 將訊息分派到對應的 input 處理流程，
+            # 各自準備不同的 API path 與 request body。
+            prepared = _prepare_request(ctx, msg)
+            if prepared is None:
                 continue
-
-            temperature = _read_temperature(ctx, msg.data)
-            if temperature is None:
-                continue
+            api_path, request_body = prepared
 
             if ctx.context().is_set():
                 break
 
             try:
-                response_status = _post_temperature(http_endpoint, temperature)
+                response_status = _post(http_endpoint + api_path, request_body)
             except Exception as exc:
                 ctx.report_error(
                     neoedgex.CodeProcessError,
-                    RuntimeError(f"failed to POST to HTTP_ENDPOINT {http_endpoint}: {exc}"),
+                    RuntimeError(f"failed to POST {api_path}: {exc}"),
                 )
                 continue
+
             try:
                 ctx.publish(
+                    "output1",
                     {
-                        "temperature": temperature,
+                        "api_path": api_path,
                         "response_status": response_status,
-                    }
+                    },
                 )
             except Exception as exc:
                 ctx.report_error(neoedgex.CodeProcessError, exc)
 
-def _read_temperature(ctx: neoedgex.NodeEnv, data: dict[str, Any]) -> int | None:
-    if "temperature" not in data:
+
+def _prepare_request(
+    ctx: neoedgex.NodeEnv, msg: neoedgex.Message
+) -> tuple[str, bytes] | None:
+    if msg.handle == "input1":
+        # 範例：input1 攜帶 temperature (int)
+        value = _read_typed_field(ctx, msg.handle, msg.data, "temperature", int)
+        if value is None:
+            return None
+        return "/temperature", json.dumps({"value": value}).encode("utf-8")
+
+    if msg.handle == "input2":
+        # 範例：input2 攜帶 running (bool)
+        value = _read_typed_field(ctx, msg.handle, msg.data, "running", bool)
+        if value is None:
+            return None
+        return "/status", json.dumps({"running": value}).encode("utf-8")
+
+    if msg.handle == "input3":
+        # 範例：input3 攜帶 message (str)
+        value = _read_typed_field(ctx, msg.handle, msg.data, "message", str)
+        if value is None:
+            return None
+        return "/event", json.dumps({"message": value}).encode("utf-8")
+
+    # 未在 schema 中定義的 handle，忽略即可
+    return None
+
+
+def _read_typed_field(
+    ctx: neoedgex.NodeEnv,
+    handle: str,
+    data: dict[str, Any],
+    key: str,
+    expected_type: type,
+) -> Any:
+    if key not in data:
         ctx.report_error(
             neoedgex.CodeProcessError,
-            RuntimeError("temperature is not defined in input schema"),
+            RuntimeError(f"{key} is not defined in {handle} schema"),
         )
         return None
-
-    value = data["temperature"]
+    value = data[key]
     if value is None:
-        ctx.report_error(neoedgex.CodeProcessError, RuntimeError("no temperature value in message"))
-        return None
-    if not isinstance(value, int):
         ctx.report_error(
             neoedgex.CodeProcessError,
-            RuntimeError("temperature is not defined as int in input schema"),
+            RuntimeError(f"no {key} value in {handle} message"),
+        )
+        return None
+    # bool is a subclass of int — guard against accepting True/False as int.
+    if expected_type is int and isinstance(value, bool):
+        ctx.report_error(
+            neoedgex.CodeProcessError,
+            RuntimeError(f"{key} is not defined as int in {handle} schema"),
+        )
+        return None
+    if not isinstance(value, expected_type):
+        ctx.report_error(
+            neoedgex.CodeProcessError,
+            RuntimeError(
+                f"{key} is not defined as {expected_type.__name__} in {handle} schema"
+            ),
         )
         return None
     return value
 
 
-def _post_temperature(http_endpoint: str, temperature: int) -> int:
-    payload = json.dumps({"number": temperature}).encode("utf-8")
+def _post(url: str, body: bytes) -> int:
     request = urllib.request.Request(
-        http_endpoint,
-        data=payload,
+        url,
+        data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
     )

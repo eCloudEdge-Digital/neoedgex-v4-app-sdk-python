@@ -5,7 +5,7 @@ import threading
 import pytest
 
 from neoedgex import CodeProcessError, Message
-from neoedgex.testutil import MockNodeEnv
+from neoedgex.testutil import MockNodeEnv, PublishedMessage
 
 
 def test_mock_node_env_records_handler_interactions() -> None:
@@ -19,11 +19,11 @@ def test_mock_node_env_records_handler_interactions() -> None:
     assert ctx.context() is done_event
     assert ctx.logger().tag() == "test"
 
-    ctx.publish({"value": 7})
+    ctx.publish("output1", {"value": 7})
     ctx.report_error(CodeProcessError, RuntimeError("boom"))
     ctx.stop()
 
-    assert ctx.published_data == [{"value": 7}]
+    assert ctx.published_data == [PublishedMessage(handle="output1", data={"value": 7})]
     assert ctx.reported_errors[0].code == CodeProcessError
     assert ctx.stop_called is True
     assert done_event.is_set()
@@ -33,6 +33,6 @@ def test_mock_node_env_publish_error() -> None:
     ctx = MockNodeEnv(publish_error=RuntimeError("publish failed"))
 
     with pytest.raises(RuntimeError, match="publish failed"):
-        ctx.publish({"value": 7})
+        ctx.publish("output1", {"value": 7})
 
-    assert ctx.published_data == [{"value": 7}]
+    assert ctx.published_data == [PublishedMessage(handle="output1", data={"value": 7})]
