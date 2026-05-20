@@ -1,5 +1,7 @@
 # NeoEdgeX App SDK Python v4 第三方開發指南
 
+> 最新版本變更見[文末版本變更紀錄](#版本變更紀錄)。
+
 ## 這個 SDK 是什麼
 
 NeoEdgeX App SDK Python v4 是用來開發 NeoEdgeX 節點應用程式的 Python SDK，適合用來實作 driver、protocol adapter、forwarder、processor 等節點。它提供第三方開發者一套固定的執行模型：
@@ -106,7 +108,7 @@ Custom App 的 input schema 定義在 `config.data.inputs` 底下，最常見的
     "input1": [
       { "key": "temperature", "type": "double", "format": "double" },
       { "key": "running", "type": "bool", "format": "bool" },
-      { "key": "capturedAt", "type": "string", "format": "datetime" }
+      { "key": "payload", "type": "string", "format": "json" }
     ]
   }
 }
@@ -360,8 +362,6 @@ handler 讀到的 `msg.data` 已經是 Python 原生值。
 假設收到的 input payload 是：
 
 ```python
-from datetime import datetime, UTC
-
 neoedgex.Message(
     handle="input1",
     source="upstream-node",
@@ -369,7 +369,8 @@ neoedgex.Message(
     data={
         "temperature": 25.5,
         "running": True,
-        "capturedAt": None,
+        # format=json 的欄位以 raw JSON 文字遞給 handler，由 handler 自行 unmarshal
+        "payload": '{"ratio":0.42,"userID":18000000000000000000}',
     },
 )
 ```
@@ -377,7 +378,7 @@ neoedgex.Message(
 handler 內建議這樣讀：
 
 ```python
-from datetime import datetime
+import json
 import neoedgex
 
 
@@ -413,20 +414,37 @@ class ExampleApp:
             else:
                 running = msg.data["running"]
 
-            captured_at: datetime
-            if "capturedAt" not in msg.data:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema 沒有定義 tag capturedAt"))
+            # payload 欄位是 raw JSON 文字 (format=json)，SDK 不替你 unmarshal；
+            # 是否要 decode、要當 object 還是 array，由 handler 自行決定。
+            raw_payload: str
+            if "payload" not in msg.data:
+                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema 沒有定義 tag payload"))
                 continue
-            elif msg.data["capturedAt"] is None:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("capturedAt 沒有由上游節點成功輸出"))
+            elif msg.data["payload"] is None:
+                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("payload 沒有由上游節點成功輸出"))
                 continue
-            elif not isinstance(msg.data["capturedAt"], datetime):
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema 未定義 tag capturedAt 為 datetime"))
+            elif not isinstance(msg.data["payload"], str):
+                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema 未定義 tag payload 為 format=json"))
                 continue
             else:
-                captured_at = msg.data["capturedAt"]
+                raw_payload = msg.data["payload"]
 
-            _ = temperature, running, captured_at
+            try:
+                payload = json.loads(raw_payload)
+            except ValueError as exc:
+                ctx.report_error(neoedgex.CodeProcessError, RuntimeError(f"payload 不是合法的 JSON object: {exc}"))
+                continue
+
+            # 取出 payload.ratio 為 float。
+            if not isinstance(payload, dict):
+                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("payload 不是 JSON object"))
+                continue
+            ratio = payload.get("ratio")
+            if not isinstance(ratio, float):
+                ctx.report_error(neoedgex.CodeProcessError, RuntimeError(f"payload.ratio 不是 float，而是 {type(ratio).__name__}"))
+                continue
+
+            _ = temperature, running, ratio
 ```
 
 建議把 `msg.data` 的語意固定成這樣：
@@ -451,6 +469,9 @@ class ExampleApp:
 | `string` | `str` |
 | `datetime` | `datetime.datetime` |
 | `base64` | `bytes` |
+| `json` | `str`（raw JSON 文字） |
+
+`json` format 的 wire value 是一段 JSON object 或 array 文字。SDK 不替你 `json.loads`，原樣以 `str` 交給 handler；要不要 unmarshal、是要當 object 還是 array，都由 handler 決定。
 
 ### 多 Input Handle 分派
 
@@ -672,6 +693,18 @@ except Exception as err:
       <td>做 base64 encode。</td>
       <td><code>b"hello" -&gt; "aGVsbG8="</code></td>
       <td>其他 Python 型別都不支援。</td>
+    </tr>
+    <tr>
+      <td rowspan="2"><code>json</code></td>
+      <td>任意可被 <code>json.dumps</code> 接受的值（<code>dict</code>、<code>list</code>、<code>tuple</code> 等）</td>
+      <td>用 <code>json.dumps</code> 序列化後，結果必須是 JSON object (<code>{...}</code>) 或 array (<code>[...]</code>)。</td>
+      <td><code>{"foo": "bar"} -&gt; '{"foo": "bar"}'</code>、<code>[1, 2, 3] -&gt; '[1, 2, 3]'</code></td>
+      <td rowspan="2">序列化結果是 scalar（number、quoted string、bool、null）會被拒絕；無法 JSON 序列化的值（set、file handle 等）也會被拒絕。拒絕時該欄位會被設為 empty field 並呼叫 <code>report_error</code>，與其他 format 的型別轉換失敗一致。</td>
+    </tr>
+    <tr>
+      <td><code>str</code> / <code>bytes</code>（已序列化過的 JSON 文字）</td>
+      <td>原樣 passthrough（不再 serialise 一次）；必須通過 <code>json.loads</code> 驗證並是 object 或 array。<code>bytes</code> 會先用 UTF-8 decode 成 <code>str</code>。</td>
+      <td><code>'{"foo":"bar"}' -&gt; '{"foo":"bar"}'</code></td>
     </tr>
   </tbody>
 </table>
@@ -938,3 +971,32 @@ class ExampleApp:
 - 因為 repo 看得到就直接依賴未公開的內部路徑。
 - 正式版程式碼忘記拿掉 mock mode。
 - 以為 `msg.data` 裡的每個 input tag 都一定會有可直接使用的值；實際上某些欄位可能是 `None`，需要由 app 自己決定怎麼處理。
+
+## 版本變更紀錄
+
+本 SDK 遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
+
+### v1.1.0 — unreleased
+
+#### 新增
+
+- **多 handle 支援**：節點的 input 與 output schema 都可同時宣告多個 handle，handler 依 `msg.handle` 將訊息分派到對應流程。
+- **`json` 資料格式**（schema 寫成 `type: "string", format: "json"`），用來承載任意 JSON 物件或陣列：
+  - `ctx.publish` 可傳入任意能序列化為 JSON 物件或陣列的值。`str` 與 `bytes` 視為已經序列化好的 JSON 文字，原樣帶過（會以 `json.loads` 驗證合法性，`bytes` 先以 UTF-8 解碼）；其他型別走 `json.dumps`。最終結果必須是物件 (`{...}`) 或陣列 (`[...]`)，純量（數字、字串、布林、null）一律拒絕。
+  - Handler 拿到的是原始 JSON 文字（Python `str`），由 handler 自行以 `json.loads` 反序列化。
+  - `json` 與其他格式之間無法互相轉換。
+
+#### 變更（不相容）
+
+- `ctx.publish` 函式簽名變更：`publish(data: dict[str, Any]) -> None` → `publish(handle: str, data: dict[str, Any]) -> None`。呼叫端必須明確指定目的 output handle。
+- `neoedgex.testutil.MockNodeEnv.published_data` 型別從 `list[dict[str, Any]]` 改為 `list[PublishedMessage]`，每筆紀錄會同時保留 publish 的 `handle` 與 `data`。
+
+#### 文件
+
+- 移除「只支援 `input1` / `output1`」的敘述，改以多 handle 為標準範例。
+- 新增 `format=json` 的完整讀取範例，使用標準的 `json.loads` 解碼路徑。
+- `format` 對 Python 型別的對照表，以及 `publish` 轉換表，皆新增 `json` 一列。
+
+### v1.0.0 — 2026-05-05
+
+首次公開發行。

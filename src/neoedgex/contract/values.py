@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import math
 import re
 import struct
@@ -59,6 +60,13 @@ class PortFieldData:
     def new_with_string(cls, value: str, data_format: DataFormat) -> "PortFieldData":
         if not data_format.get_type().is_supported():
             raise ValueError(f"unsupported data format '{data_format.value}'")
+        # FormatJson runs through the same validation pipeline as
+        # new_with_any: the string must itself be valid JSON and shaped
+        # as an object or array. Otherwise the public string constructor
+        # would silently produce malformed JSON fields, because
+        # convert_value_by_format is a no-op passthrough for json.
+        if data_format == DataFormat.JSON:
+            return _new_json_field_from_any(value)
         try:
             convert_value_by_format(value, data_format)
         except Exception as exc:
@@ -73,6 +81,11 @@ class PortFieldData:
             raise ValueError(f"unsupported data format '{dest_format.value}'")
         if _is_nil_any_value(any_value):
             raise ValueError("nil value is not supported for conversion")
+        # FormatJson accepts any value that marshals to a JSON object or array.
+        # str and bytes are treated as already-serialised JSON text;
+        # everything else goes through json.dumps.
+        if dest_format == DataFormat.JSON:
+            return _new_json_field_from_any(any_value)
         value, src_format = convert_any_value(any_value)
         if not src_format.can_convert_to(dest_format):
             raise ValueError(
@@ -193,6 +206,14 @@ class PortFieldData:
                 raise ValueError(
                     f"internal error: unsupported destination format '{dest_format.value}'"
                 )
+
+        elif dest_format == DataFormat.JSON:
+            if src_format == DataFormat.JSON:
+                new_value = src_value
+            else:
+                raise ValueError(
+                    f"internal error: unsupported destination format '{dest_format.value}'"
+                )
         else:
             raise ValueError(
                 f"internal error: unsupported destination format '{dest_format.value}'"
@@ -270,11 +291,68 @@ def convert_value_by_format(value: str, src_format: DataFormat) -> Any:
         return base64.b64decode(value.encode("ascii"))
     if src_format == DataFormat.BOOL:
         return value == "true"
+    if src_format == DataFormat.JSON:
+        # Hand the raw JSON text back as-is; handlers decide how to
+        # unmarshal it (object vs array, number precision, etc.).
+        return value
     raise ValueError(f"unsupported destination format '{src_format.value}' for conversion")
 
 
 def _is_nil_any_value(any_value: Any) -> bool:
     return any_value is None
+
+
+def _reject_non_standard_json_constant(token: str) -> Any:
+    # json.loads is permissive by default and silently accepts the Python-only
+    # tokens "NaN", "Infinity", "-Infinity". RFC 8259 forbids them; strict
+    # parsers downstream (Go encoding/json, browser JSON.parse, etc.) reject
+    # such payloads. Mirror the encode-side allow_nan=False guard here so the
+    # passthrough path rejects raw inputs that carry these tokens.
+    raise ValueError(f"non-standard JSON token not allowed: {token!r}")
+
+
+def _new_json_field_from_any(any_value: Any) -> "PortFieldData":
+    # str / bytes are treated as already-serialised JSON text and passed
+    # through verbatim. Everything else goes through json.dumps. In every
+    # path, the resulting text must be a JSON object ({...}) or array
+    # ([...]) — scalars (number, quoted string, bool, null) are rejected.
+    if isinstance(any_value, str):
+        raw_json = any_value
+        try:
+            json.loads(raw_json, parse_constant=_reject_non_standard_json_constant)
+        except ValueError as exc:
+            raise ValueError(f"string value is not valid JSON: {exc}") from exc
+    elif isinstance(any_value, (bytes, bytearray)):
+        try:
+            raw_json = bytes(any_value).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"bytes value is not valid UTF-8: {exc}") from exc
+        try:
+            json.loads(raw_json, parse_constant=_reject_non_standard_json_constant)
+        except ValueError as exc:
+            raise ValueError(f"bytes value is not valid JSON: {exc}") from exc
+    else:
+        # allow_nan=False rejects NaN / Infinity / -Infinity values. Python's
+        # default json.dumps emits these as the non-standard tokens "NaN" /
+        # "Infinity" / "-Infinity", which strict JSON parsers downstream
+        # reject; better to fail loudly on encode.
+        try:
+            raw_json = json.dumps(any_value, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"cannot encode value of type '{type(any_value).__name__}' as JSON: {exc}"
+            ) from exc
+
+    # JSON top-level must be an object or an array; scalars are rejected.
+    # The shape check uses the trimmed first character, but the stored
+    # value preserves the original encoding (including whitespace).
+    trimmed = raw_json.lstrip()
+    if not trimmed or (trimmed[0] != "{" and trimmed[0] != "["):
+        raise ValueError(
+            f"value of type '{type(any_value).__name__}' is not a JSON object or array"
+        )
+
+    return PortFieldData(type=DataType.STRING, format=DataFormat.JSON, value=raw_json)
 
 
 def _convert_int_format_to_number_format(

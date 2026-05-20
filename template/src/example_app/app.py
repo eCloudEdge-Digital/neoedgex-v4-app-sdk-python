@@ -54,8 +54,8 @@ def _prepare_request(
     ctx: neoedgex.NodeEnv, msg: neoedgex.Message
 ) -> tuple[str, bytes] | None:
     if msg.handle == "input1":
-        # 範例：input1 攜帶 temperature (int)
-        value = _read_typed_field(ctx, msg.handle, msg.data, "temperature", int)
+        # 範例：input1 攜帶 temperature (float)
+        value = _read_typed_field(ctx, msg.handle, msg.data, "temperature", float)
         if value is None:
             return None
         return "/temperature", json.dumps({"value": value}).encode("utf-8")
@@ -68,11 +68,35 @@ def _prepare_request(
         return "/status", json.dumps({"running": value}).encode("utf-8")
 
     if msg.handle == "input3":
-        # 範例：input3 攜帶 message (str)
-        value = _read_typed_field(ctx, msg.handle, msg.data, "message", str)
-        if value is None:
+        # 範例：input3 攜帶 payload (format=json)，handler 拿到的是 raw JSON 字串，
+        # 由 app 自行決定怎麼 unmarshal。
+        raw_payload = _read_typed_field(ctx, msg.handle, msg.data, "payload", str)
+        if raw_payload is None:
             return None
-        return "/event", json.dumps({"message": value}).encode("utf-8")
+        try:
+            payload = json.loads(raw_payload)
+        except ValueError as exc:
+            ctx.report_error(
+                neoedgex.CodeProcessError,
+                RuntimeError(f"payload is not a valid JSON object: {exc}"),
+            )
+            return None
+        if not isinstance(payload, dict):
+            ctx.report_error(
+                neoedgex.CodeProcessError,
+                RuntimeError("payload is not a JSON object"),
+            )
+            return None
+        # 範例：取出 payload.id (int)
+        id_value = payload.get("id")
+        if not isinstance(id_value, int) or isinstance(id_value, bool):
+            ctx.report_error(
+                neoedgex.CodeProcessError,
+                RuntimeError(f"payload 'id' is not an int, got {type(id_value).__name__}"),
+            )
+            return None
+        # body 直接 passthrough raw payload；path 帶上 id
+        return f"/payload/{id_value}", raw_payload.encode("utf-8")
 
     # 未在 schema 中定義的 handle，忽略即可
     return None

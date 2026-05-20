@@ -6,6 +6,11 @@ from example_app import app as app_module
 from neoedgex.testutil import MockNodeEnv, PublishedMessage
 
 
+# 2**53 + 1 — a value that would lose precision if the handler decoded
+# the raw JSON payload through a path that round-tripped through float64.
+BIG_ID = (1 << 53) + 1
+
+
 def test_example_app_reports_missing_endpoint(monkeypatch) -> None:
     monkeypatch.delenv("HTTP_ENDPOINT", raising=False)
     ctx = MockNodeEnv()
@@ -28,9 +33,15 @@ def test_example_app_routes_each_input_to_its_own_path(monkeypatch) -> None:
     monkeypatch.setenv("HTTP_ENDPOINT", "https://api.example.com")
     ctx = MockNodeEnv(
         message_iterable=[
-            neoedgex.Message(handle="input1", data={"temperature": 25}, source="upstream"),
+            neoedgex.Message(handle="input1", data={"temperature": 25.5}, source="upstream"),
             neoedgex.Message(handle="input2", data={"running": True}, source="upstream"),
-            neoedgex.Message(handle="input3", data={"message": "hello"}, source="upstream"),
+            # SDK delivers format=json fields as raw JSON strings; the
+            # handler decides how to unmarshal them.
+            neoedgex.Message(
+                handle="input3",
+                data={"payload": f'{{"id":{BIG_ID},"label":"demo"}}'},
+                source="upstream",
+            ),
         ]
     )
 
@@ -38,9 +49,13 @@ def test_example_app_routes_each_input_to_its_own_path(monkeypatch) -> None:
 
     assert ctx.reported_errors == []
     assert calls == [
-        ("https://api.example.com/temperature", b'{"value": 25}'),
+        ("https://api.example.com/temperature", b'{"value": 25.5}'),
         ("https://api.example.com/status", b'{"running": true}'),
-        ("https://api.example.com/event", b'{"message": "hello"}'),
+        # path encodes the int id; body is the raw JSON payload passed through.
+        (
+            f"https://api.example.com/payload/{BIG_ID}",
+            f'{{"id":{BIG_ID},"label":"demo"}}'.encode("utf-8"),
+        ),
     ]
     assert ctx.published_data == [
         PublishedMessage(
@@ -53,7 +68,7 @@ def test_example_app_routes_each_input_to_its_own_path(monkeypatch) -> None:
         ),
         PublishedMessage(
             handle="output1",
-            data={"api_path": "/event", "response_status": 201},
+            data={"api_path": f"/payload/{BIG_ID}", "response_status": 201},
         ),
     ]
 
@@ -66,7 +81,7 @@ def test_example_app_ignores_unknown_handle(monkeypatch) -> None:
     monkeypatch.setenv("HTTP_ENDPOINT", "https://api.example.com")
     ctx = MockNodeEnv(
         message_iterable=[
-            neoedgex.Message(handle="input4", data={"foo": "bar"}, source="upstream"),
+            neoedgex.Message(handle="input999", data={"foo": "bar"}, source="upstream"),
         ]
     )
 

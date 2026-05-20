@@ -1,5 +1,7 @@
 # NeoEdgeX App SDK Python v4 Developer Guide
 
+> See the [Changelog](#changelog) at the end for the latest release notes.
+
 ## What This SDK Is
 
 NeoEdgeX App SDK Python v4 is the Python SDK for building NeoEdgeX node applications such as drivers, protocol adapters, forwarders, and processors. It gives third-party developers a standard runtime model:
@@ -106,7 +108,7 @@ Custom App input handles live under `config.data.inputs`. The most common shape 
     "input1": [
       { "key": "temperature", "type": "double", "format": "double" },
       { "key": "running", "type": "bool", "format": "bool" },
-      { "key": "capturedAt", "type": "string", "format": "datetime" }
+      { "key": "payload", "type": "string", "format": "json" }
     ]
   }
 }
@@ -360,8 +362,6 @@ You only need to check two things: whether the key exists, and whether the value
 Assume the incoming payload is:
 
 ```python
-from datetime import datetime, UTC
-
 neoedgex.Message(
     handle="input1",
     source="upstream-node",
@@ -369,7 +369,8 @@ neoedgex.Message(
     data={
         "temperature": 25.5,
         "running": True,
-        "capturedAt": None,
+        # A format=json field arrives as raw JSON text; the handler unmarshals it itself.
+        "payload": '{"ratio":0.42,"userID":18000000000000000000}',
     },
 )
 ```
@@ -377,7 +378,7 @@ neoedgex.Message(
 Inside the handler, read it like this:
 
 ```python
-from datetime import datetime
+import json
 import neoedgex
 
 
@@ -413,20 +414,38 @@ class ExampleApp:
             else:
                 running = msg.data["running"]
 
-            captured_at: datetime
-            if "capturedAt" not in msg.data:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema does not define tag capturedAt"))
+            # The payload field is delivered as raw JSON text (format=json);
+            # the SDK does not unmarshal it for you. The handler decides
+            # whether to decode it, and as object or array.
+            raw_payload: str
+            if "payload" not in msg.data:
+                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema does not define tag payload"))
                 continue
-            elif msg.data["capturedAt"] is None:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("capturedAt was not successfully produced by the upstream node"))
+            elif msg.data["payload"] is None:
+                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("payload was not successfully produced by the upstream node"))
                 continue
-            elif not isinstance(msg.data["capturedAt"], datetime):
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema does not define tag capturedAt as datetime"))
+            elif not isinstance(msg.data["payload"], str):
+                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema does not define tag payload as format=json"))
                 continue
             else:
-                captured_at = msg.data["capturedAt"]
+                raw_payload = msg.data["payload"]
 
-            _ = temperature, running, captured_at
+            try:
+                payload = json.loads(raw_payload)
+            except ValueError as exc:
+                ctx.report_error(neoedgex.CodeProcessError, RuntimeError(f"payload is not a valid JSON object: {exc}"))
+                continue
+
+            # Read payload.ratio as float.
+            if not isinstance(payload, dict):
+                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("payload is not a JSON object"))
+                continue
+            ratio = payload.get("ratio")
+            if not isinstance(ratio, float):
+                ctx.report_error(neoedgex.CodeProcessError, RuntimeError(f"payload.ratio is not a float, got {type(ratio).__name__}"))
+                continue
+
+            _ = temperature, running, ratio
 ```
 
 Treat `msg.data` with this fixed meaning:
@@ -451,6 +470,9 @@ Treat `msg.data` with this fixed meaning:
 | `string` | `str` |
 | `datetime` | `datetime.datetime` |
 | `base64` | `bytes` |
+| `json` | `str` (raw JSON text) |
+
+A `json` field on the wire is a JSON object or array literal. The SDK does not call `json.loads` for you — it hands the raw text to your handler as a `str`. Your handler decides whether to decode it (and as object or array).
 
 ### Dispatching Across Multiple Input Handles
 
@@ -672,6 +694,18 @@ When you publish output fields with `ctx.publish(handle, {...})`, conversion is 
       <td>Bytes are base64-encoded.</td>
       <td><code>b"hello" -&gt; "aGVsbG8="</code></td>
       <td>Other Python types are not accepted.</td>
+    </tr>
+    <tr>
+      <td rowspan="2"><code>json</code></td>
+      <td>Any value accepted by <code>json.dumps</code> (<code>dict</code>, <code>list</code>, <code>tuple</code>, and so on)</td>
+      <td>Serialised via <code>json.dumps</code>; the result must be a JSON object (<code>{...}</code>) or array (<code>[...]</code>).</td>
+      <td><code>{"foo": "bar"} -&gt; '{"foo": "bar"}'</code>, <code>[1, 2, 3] -&gt; '[1, 2, 3]'</code></td>
+      <td rowspan="2">Marshal results that are JSON scalars (number, quoted string, bool, null) are rejected; values that cannot be JSON-encoded (sets, file handles, etc.) are also rejected. On rejection the field is set to an empty field and <code>report_error</code> is called, matching how other format conversion failures are surfaced.</td>
+    </tr>
+    <tr>
+      <td><code>str</code> / <code>bytes</code> (already-serialised JSON text)</td>
+      <td>Passed through verbatim (not re-serialised); must parse via <code>json.loads</code> and be a JSON object or array. <code>bytes</code> is decoded as UTF-8 first.</td>
+      <td><code>'{"foo":"bar"}' -&gt; '{"foo":"bar"}'</code></td>
     </tr>
   </tbody>
 </table>
@@ -942,3 +976,32 @@ class ExampleApp:
 - Depending on non-public repository paths instead of the documented SDK surface.
 - Leaving mock mode enabled in production code.
 - Assuming every input tag in `msg.data` always contains a directly usable value; in practice, some fields may be `None`, and the app needs to decide how to handle them.
+
+## Changelog
+
+This SDK follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+### v1.1.0 — unreleased
+
+#### Added
+
+- **Multi-handle support** for both input and output schemas. A node may declare multiple handles, and handlers dispatch with `if msg.handle == ...` on `neoedgex.Message`.
+- **`json` data format** (declared as `type: "string", format: "json"`) for carrying arbitrary JSON object / array payloads:
+  - `ctx.publish` accepts any value that serialises to a JSON object or array. `str` and `bytes` arguments are treated as already-serialised JSON text and passed through verbatim (validated with `json.loads`; `bytes` is decoded as UTF-8 first); other Python values go through `json.dumps`. The final encoding must be an object (`{...}`) or array (`[...]`); JSON scalars (number, quoted string, bool, null) are rejected.
+  - On decode, the handler receives the raw JSON text as a Python `str` and unmarshals it itself with `json.loads`.
+  - The `json` format does not convert to or from any other format.
+
+#### Changed (breaking)
+
+- `ctx.publish` signature changed from `publish(data: dict[str, Any]) -> None` to `publish(handle: str, data: dict[str, Any]) -> None`. Callers must pass the destination output handle explicitly.
+- `neoedgex.testutil.MockNodeEnv.published_data` is now a `list[PublishedMessage]` (was `list[dict[str, Any]]`); each entry records the publish `handle` alongside the `data`.
+
+#### Documentation
+
+- Removed the "only `input1` / `output1` supported" claims from this guide; multi-handle usage is now the canonical example.
+- Added a complete worked example for `format=json` covering the standard `json.loads` decode path.
+- The `format → Python type` table and the `publish` conversion table both gained a `json` row.
+
+### v1.0.0 — 2026-05-05
+
+Initial public release.
