@@ -7,13 +7,13 @@
         "name": "custom-httpclient-env-node",
         "inputs": {
           "input1": [
-            { "key": "temperature", "type": "double", "format": "double" }
+            { "key": "temperature", "type": "int64", "format": "int64" }
           ],
           "input2": [
             { "key": "running", "type": "bool", "format": "bool" }
           ],
           "input3": [
-            { "key": "payload", "type": "string", "format": "json" }
+            { "key": "message", "type": "string", "format": "string" }
           ]
         },
         "outputs": {
@@ -37,7 +37,7 @@
         "nodeID": "custom-httpclient-env-node",
         "handle": "input1",
         "data": {
-          "temperature": { "type": "double", "format": "double", "value": "25.5" }
+          "temperature": { "type": "int64", "format": "int64", "value": "25" }
         }
       },
       {
@@ -51,11 +51,7 @@
         "nodeID": "custom-httpclient-env-node",
         "handle": "input3",
         "data": {
-          "payload": {
-            "type": "string",
-            "format": "json",
-            "value": "{\"id\":9007199254740993,\"label\":\"demo\"}"
-          }
+          "message": { "type": "string", "format": "string", "value": "hello" }
         }
       }
     ]

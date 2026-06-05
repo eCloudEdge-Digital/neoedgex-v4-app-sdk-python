@@ -66,7 +66,6 @@ class DataFormat(str, Enum):
     STRING = "string"
     DATETIME = "datetime"
     BASE64 = "base64"
-    JSON = "json"
 
     def get_type(self) -> DataType:
         return TYPE_FORMAT_MAP.get(self, DataType.UNDEFINED)
@@ -135,8 +134,6 @@ class DataFormat(str, Enum):
             }
         if dest_format == DataFormat.BASE64:
             return self == DataFormat.BASE64
-        if dest_format == DataFormat.JSON:
-            return self == DataFormat.JSON
         return False
 
 
@@ -155,7 +152,6 @@ TYPE_FORMAT_MAP = {
     DataFormat.STRING: DataType.STRING,
     DataFormat.DATETIME: DataType.STRING,
     DataFormat.BASE64: DataType.RAW,
-    DataFormat.JSON: DataType.STRING,
 }
 
 
