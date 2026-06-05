@@ -14,21 +14,17 @@ To test the current local SDK checkout, build with `template/Dockerfile.local`. 
 docker build -f template/Dockerfile.local -t neoedgex-python-template:local .
 ```
 
-### GitHub SDK Source
+### Published SDK
 
-To build like an external app that installs the SDK from the private GitHub repository, build with `template/Dockerfile.github`. This image installs the SDK from the repository default branch HEAD with a BuildKit secret SSH key.
-
-This SSH key requirement is temporary. The Python SDK is not publicly available yet, so the build must use a private key that can read the private GitHub repository.
+To build like an external app that installs the SDK as a published dependency, build with `template/Dockerfile.github`. This image resolves the SDK from the package index exactly as declared in `template/pyproject.toml`, so no credentials are required:
 
 ```bash
-DOCKER_BUILDKIT=1 docker build --secret id=ssh_key,src=$HOME/.ssh/id_ed25519 -f template/Dockerfile.github -t neoedgex-python-template:github .
+docker build -f template/Dockerfile.github -t neoedgex-python-template:github .
 ```
 
-Replace `$HOME/.ssh/id_ed25519` with the private key that has read access to the SDK repository. The key is mounted only during the build step that downloads the SDK.
+To install a specific SDK version, pin the `neoedgex-v4-app-sdk-python` dependency in `template/pyproject.toml`; the build picks it up automatically.
 
-If you need to install a specific SDK version in the GitHub-based image, change the SDK Git URL in `template/Dockerfile.github` from the default branch form to a tagged ref, for example `git+ssh://git@github.com/eCloudEdge-Digital/neoedgex-v4-app-sdk-python.git@v1.0.0`.
-
-Both Dockerfiles use multi-stage builds. The final image installs only built wheels and the production entrypoint, so it does not retain the local SDK source tree, private SSH key, or GitHub SSH build tooling.
+Both Dockerfiles use multi-stage builds. The final image installs only built wheels and the production entrypoint, so it does not retain the local SDK source tree or build tooling.
 
 ## Run Mock NeoEdgeX Locally
 
