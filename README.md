@@ -23,7 +23,7 @@ python3 -m pip install "neoedgex-v4-app-sdk-python @ git+https://github.com/eClo
 If you need to install a specific version, use the release tag instead:
 
 ```bash
-python3 -m pip install "neoedgex-v4-app-sdk-python @ git+https://github.com/eCloudEdge-Digital/neoedgex-v4-app-sdk-python.git@v1.0.0"
+python3 -m pip install "neoedgex-v4-app-sdk-python @ git+https://github.com/eCloudEdge-Digital/neoedgex-v4-app-sdk-python.git@v1.1.1"
 ```
 
 For internal architecture and implementation notes, see [DESIGN.md](./DESIGN.md).

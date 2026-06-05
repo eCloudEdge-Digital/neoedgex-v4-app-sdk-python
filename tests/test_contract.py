@@ -166,7 +166,7 @@ def test_node_unmarshal_ignores_legacy_position_field() -> None:
                 "description": "test node",
                 "inputs": {},
                 "outputs": {},
-                "application": {"key": "app", "version": "1.0.0"},
+                "application": {"key": "app", "version": "1.1.1"},
                 "settings": {},
             },
         }

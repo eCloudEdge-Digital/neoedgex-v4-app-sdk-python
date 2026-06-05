@@ -841,7 +841,7 @@ Minimal mock config shape:
         },
         "application": {
           "key": "demo-app",
-          "version": "1.0.0"
+          "version": "1.1.1"
         },
         "settings": {}
       }

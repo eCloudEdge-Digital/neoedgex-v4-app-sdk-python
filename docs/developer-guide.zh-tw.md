@@ -837,7 +837,7 @@ if __name__ == "__main__":
         },
         "application": {
           "key": "demo-app",
-          "version": "1.0.0"
+          "version": "1.1.1"
         },
         "settings": {}
       }
