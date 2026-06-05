@@ -179,7 +179,7 @@ class MQTTMessenger:
         self._logger.info("Connected to NeoEdgeX Messenger")
         self._start_resubscribe_loop()
 
-    def on_disconnect(self, _client: Any, _userdata: Any, reason_code: Any, _properties: Any = None) -> None:
+    def on_disconnect(self, _client: Any, _userdata: Any, _disconnect_flags: Any, reason_code: Any, _properties: Any = None) -> None:
         if _is_success_reason_code(reason_code):
             return
         self.on_connection_lost(RuntimeError(f"lost connection: rc={reason_code}"))

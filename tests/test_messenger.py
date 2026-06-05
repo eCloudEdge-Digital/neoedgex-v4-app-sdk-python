@@ -165,6 +165,31 @@ def test_on_connect_handles_reason_code_object_failure() -> None:
     assert client._connected_event.is_set()
 
 
+def test_on_disconnect_accepts_paho_v2_signature() -> None:
+    """paho-mqtt CallbackAPIVersion.VERSION2 calls on_disconnect with
+    (client, userdata, disconnect_flags, reason_code, properties)."""
+    client = MQTTMessenger(StubSDK(), MessengerOptions(config=MessengerConfig()))
+    cancel = threading.Event()
+    client._resubscribe_cancel = cancel
+
+    # Failure reason code: should drive connection-lost handling.
+    client.on_disconnect(None, None, None, FakeReasonCode(135, "Not authorized"), None)
+
+    assert cancel.is_set()
+    assert client._connected is False
+
+
+def test_on_disconnect_ignores_clean_disconnect() -> None:
+    client = MQTTMessenger(StubSDK(), MessengerOptions(config=MessengerConfig()))
+    cancel = threading.Event()
+    client._resubscribe_cancel = cancel
+
+    # Clean disconnect (rc=0): no connection-lost handling.
+    client.on_disconnect(None, None, None, 0, None)
+
+    assert not cancel.is_set()
+
+
 def test_disconnect_and_connection_lost_are_race_safe() -> None:
     fake_client = FakeMQTTClient()
     client = MQTTMessenger(
