@@ -1,5 +1,7 @@
 # NeoEdgeX App SDK Python v4 Developer Guide
 
+> See the [Changelog](#changelog) at the end for the latest release notes.
+
 ## What This SDK Is
 
 NeoEdgeX App SDK Python v4 is the Python SDK for building NeoEdgeX node applications such as drivers, protocol adapters, forwarders, and processors. It gives third-party developers a standard runtime model:
@@ -9,17 +11,22 @@ NeoEdgeX App SDK Python v4 is the Python SDK for building NeoEdgeX node applicat
 - publish downstream output through `ctx.publish(handle, ...)`
 - report runtime errors through `ctx.report_error(...)`
 
-The SDK also handles platform-facing concerns such as node lifecycle, message transport integration, heartbeats, status reporting, shutdown handling, and mock-mode execution.
+The SDK also handles node lifecycle, message transport, heartbeats, error reporting, shutdown, and mock mode.
+
+Python SDK 2.0.0 speaks the NeoFlow CBOR message format: any node that implements the same format exchanges NeoFlow messages with a Python node byte-compatibly, and the golden fixture in `tests/testdata/golden/` — recorded from a live peer node — is replayed through the Python encode/decode path on every test run.
 
 ## Public Surface
 
-Third-party applications should only depend on these packages:
+Third-party applications may depend on these packages:
 
-- `neoedgex`
-- `neoedgex.mock`
-- `neoedgex.testutil` (for unit tests only)
+- `neoedgex` — the app entry point, the handler interface, and the types a handler works with
+- `neoedgex.contract` — the schema types: `DataType`, `PortFieldSchema`, `NodeData`
+- `neoedgex.mock` — the configuration format for local mock runs
+- `neoedgex.testutil` — a `NodeEnv` double and a message builder, for unit tests; a production entrypoint has no reason to import it
 
-These are the stable public entry points documented by this guide:
+An app that only reads values and publishes values never has to import `neoedgex.contract` — `DataType`, `Node`, `Message`, `Logger`, and `ErrorCode` are re-exported from `neoedgex`. You need `contract` as soon as you name a schema type in Python code, for example to build a node configuration in a test or to walk `node_config().data.inputs`.
+
+These are the entry points documented by this guide:
 
 - `neoedgex.new(handler)`
 - `App.run()`
@@ -29,30 +36,26 @@ These are the stable public entry points documented by this guide:
 - `neoedgex.NodeHandler`
 - `neoedgex.NodeEnv`
 - `neoedgex.Node`
-- `neoedgex.Message`
+- `neoedgex.Message`, with `to_dict()` and `to_dataclass(...)`
 - `neoedgex.Logger`
-- `neoedgex.ErrorCode`
+- `neoedgex.ErrorCode`, with the `neoedgex.CodeInitializationError` / `CodeNetworkError` / `CodeProcessError` aliases
+- `neoedgex.DataType`
+- `neoedgex.convert_to_typed_value(...)` — the conversion engine `publish` uses, callable directly
+- `neoedgex.PortFieldData` — the `{type, value}` string-form field value used by mock configs and device-facing code
+- `neoedgex.convert_any_value(...)` — turns a native Python value into its `PortFieldData` string form and inferred type
+- `neoedgex.convert_value_by_type(...)` — parses a `PortFieldData` string back into the native Python value of its type
+- `neoedgex.contract.PortFieldSchema`, `neoedgex.contract.NodeData`
 - `neoedgex.mock.load_config(...)`
-- `neoedgex.testutil.MockNodeEnv`
+- `neoedgex.testutil.MockNodeEnv`, with `new_message(...)`
+- `neoedgex.testutil.new_message(...)`, `testutil.UNDECLARED`, `testutil.Single`, `testutil.PublishedMessage`
 
-Do **not** depend on packages outside the public SDK surface listed above, even if other paths are visible in the repository. Their structure is not part of the external SDK contract.
-
-## Packaging Rules
-
-Production apps should import only these packages:
-
-- `neoedgex`
-- `neoedgex.mock`
-
-Tests may also import:
-
-- `neoedgex.testutil`
-
-Do not import internal or unstable implementation paths even if they are visible in the repository.
+Every other path in the repo is off-limits, `neoedgex._internal` above all: it is not part of the SDK contract and may change in any release.
 
 ## Quick Start
 
 A NeoEdgeX app implements `neoedgex.NodeHandler` and starts with `neoedgex.new(...).run()`.
+
+> This handler is executed as-is by [`tests/test_guide_examples.py`](../tests/test_guide_examples.py).
 
 ```python
 import neoedgex
@@ -62,12 +65,7 @@ class ExampleApp:
     def handle(self, ctx: neoedgex.NodeEnv) -> None:
         for _msg in ctx.messages():
             try:
-                ctx.publish(
-                    "output1",
-                    {
-                        "hello": "world",
-                    },
-                )
+                ctx.publish("output1", {"power": 42.0})
             except Exception as err:
                 ctx.report_error(neoedgex.CodeProcessError, err)
 
@@ -76,6 +74,8 @@ if __name__ == "__main__":
     neoedgex.new(ExampleApp()).run()
 ```
 
+The handle and the key are not free-form: `publish` builds the payload from the node's output schema, so this example only sends something on a node whose `output1` handle declares a `power` field. Keys the schema does not declare are dropped, which is the first thing to check when nothing reaches the downstream node. See Output Schema below.
+
 To disable internal SDK logs, call `disable_sdk_log()` before `run()`:
 
 ```python
@@ -83,14 +83,16 @@ app = neoedgex.new(ExampleApp()).disable_sdk_log()
 app.run()
 ```
 
+It silences only what the SDK writes about itself. Lines your handler writes through `ctx.logger()` keep coming out.
+
 ## Configuring a Custom App
 
 The SDK reads platform-mounted files from the fixed root path `/opt/neoedgex`:
 
-- `messenger.json`: `/opt/neoedgex/config/messenger.json`, which defines which NeoEdgeX topics this app is allowed to subscribe to and publish through the messenger; it is usually generated by the platform, so third-party apps normally do not edit it by hand
-- `config.json`: `/opt/neoedgex/config/config.json`, which is the node configuration file delivered by the platform; the SDK reads it and exposes the current node settings through `ctx.node_config()`
+- `/opt/neoedgex/config/messenger.json`: the MQTT account and password generated by the platform; the broker applies the topic permissions that belong to that account. Mounted read-only, so an app neither can nor needs to modify it.
+- `/opt/neoedgex/config/config.json`: the node configuration delivered by the platform; the SDK exposes it to the handler through `ctx.node_config()`
 
-A Custom App node is configured primarily through the node definition returned by `ctx.node_config()`. In practice, you usually adjust three areas:
+A Custom App node is configured through the node definition returned by `ctx.node_config()`, in three areas:
 
 1. `config.data.inputs`
 2. `config.data.outputs`
@@ -98,53 +100,58 @@ A Custom App node is configured primarily through the node definition returned b
 
 ### Input Schema
 
-Custom App input handles live under `config.data.inputs`. The most common shape is:
+Custom App input handles live under `config.data.inputs`:
 
 ```json
 {
   "inputs": {
     "input1": [
-      { "key": "temperature", "type": "double", "format": "double" },
-      { "key": "running", "type": "bool", "format": "bool" },
-      { "key": "capturedAt", "type": "string", "format": "datetime" }
+      { "key": "temperature", "type": "double" }
+    ],
+    "input2": [
+      { "key": "running", "type": "bool" }
+    ],
+    "input3": [
+      { "key": "capturedAt", "type": "string" }
     ]
   }
 }
 ```
 
-You can define multiple input handles such as `input1`, `input2`, `input3`. The handler receives all input messages through the same `ctx.messages()` stream and dispatches by `msg.handle`.
+A node can declare multiple input handles, each with its own field schema; the handler uses `msg.handle` to tell which input the message came from.
 
-Input schema describes which fields your handler expects to read from `ctx.messages()` for each handle. Each field defines:
+Input schema describes the fields your handler reads from `ctx.messages()`. Each field defines:
 
-- `key`: the field name that will appear in `msg.data`
-- `type`: the coarse NeoFlow data category
-- `format`: the concrete representation of that field
+- `key`: the field name your handler reads from the decoded message
+- `type`: the field data type, which fully determines the decoded Python value
 
-When you adjust the input schema, you are changing which keys the SDK will decode into `neoedgex.Message.data` for that handle. The keys your handler reads should stay aligned with this definition, and the resulting Python value type comes from the SDK's decode result.
+When you adjust the input schema, you are changing which keys the SDK decodes by schema type when your handler calls `msg.to_dict()` on that handle — and which keys `msg.to_dataclass(...)` falls back to the schema for when a value the upstream node sent does not match the field's annotation. The keys your handler reads should stay aligned with this definition, and the resulting Python value type comes from the SDK's decode result.
 
 <img width="200" height="102" src="./assets/node-input-config.png" />
 
 ### Output Schema
 
-Custom App output handles live under `config.data.outputs`. The most common shape is:
+Custom App output handles live under `config.data.outputs`:
 
 ```json
 {
   "outputs": {
     "output1": [
-      { "key": "power", "type": "double", "format": "double" },
-      { "key": "status", "type": "string", "format": "string" }
+      { "key": "power", "type": "double" },
+      { "key": "status", "type": "string" }
     ]
   }
 }
 ```
 
-You can define multiple output handles, and the handler picks one per call via `ctx.publish(handle, {...})`. The schema under each output handle controls how that call is validated and converted:
+A node can declare multiple output handles, each with its own field schema; the handler selects the destination by passing the handle name as the first argument to `ctx.publish(handle, data)`.
 
-- your published dict keys should match the keys defined in the chosen output handle
-- the destination `format` determines which Python values are accepted and how they are converted
-- omitted schema fields are filled with an empty field serialized as `type=""`, `format=""`, and `value=""`
-- explicit `None` values are also published as empty fields
+This schema controls how `ctx.publish(handle, {...})` is validated and converted:
+
+- your published dict keys should match the keys defined under that `handle`
+- the destination `type` determines which Python values are accepted and how they are converted
+- omitted schema fields are published as CBOR null (undefined)
+- explicit `None` values are also published as CBOR null
 
 If you add, remove, or rename output fields here, update your `ctx.publish(...)` call to match.
 
@@ -152,7 +159,7 @@ If you add, remove, or rename output fields here, update your `ctx.publish(...)`
 
 ### Settings
 
-Custom App runtime settings live under `config.data.settings`. These fields affect the generated `docker-compose.yml` like this:
+Custom App runtime settings live under `config.data.settings`, and map onto the generated `docker-compose.yml` like this:
 
 - `containerName`: controls both the service key and `container_name`
 - `image`: becomes the service `image`
@@ -162,11 +169,11 @@ Custom App runtime settings live under `config.data.settings`. These fields affe
 - `gpu.enabled=true`: adds a `gpus` section
 - `portBindings`: becomes the service `ports`
 
-Some fields still belong to node settings, but do not appear directly in the compose service example below:
+Some fields belong to node settings but do not appear in the compose service:
 
 - `credentials`: `neoedgex-agent` uses these credentials to log in to the Docker registry and pull the container image specified by `image`
 
-The resulting `docker-compose.yml` will look like this:
+The resulting `docker-compose.yml`:
 
 ```yaml
 name: neoedgex
@@ -209,17 +216,17 @@ services:
 
 ### Passing App Config
 
-After the app starts, it reads its actual business configuration from environment variables or mounted files. The SDK carries those values into the container, but it does not parse your app-specific business config schema.
+An app reads its business configuration from environment variables or mounted files; the SDK carries those values into the container but does not parse your app's business config.
 
 #### Pattern A: fixed-key env var config
 
-This pattern works well for:
+Good for:
 
 - small configuration payloads
 - single strings or JSON blobs
 - a small amount of configuration that fits naturally in environment variables
 
-For example, define a fixed key in `settings.envVars`:
+Define a fixed key in `settings.envVars`:
 
 ```json
 "envVars": [
@@ -231,7 +238,7 @@ For example, define a fixed key in `settings.envVars`:
 ]
 ```
 
-In the generated compose service, this becomes container environment. Your app can then read the fixed key directly:
+The app then reads the fixed key:
 
 ```python
 import os
@@ -241,9 +248,7 @@ if not raw:
     raise ValueError("HTTPCLIENT_CONFIG_JSON is required")
 ```
 
-The important part is that the fixed env key and the payload format are defined by your app contract, not by the SDK.
-
-If you do not want to place a full JSON document into one env var, you can also split JSON fields into multiple fixed env vars:
+You can also split the fields into several fixed env vars:
 
 ```json
 "envVars": [
@@ -265,8 +270,6 @@ If you do not want to place a full JSON document into one env var, you can also 
 ]
 ```
 
-Your app can then read those fixed keys individually:
-
 ```python
 import os
 
@@ -275,18 +278,16 @@ method = os.getenv("HTTPCLIENT_METHOD", "")
 timeout_raw = os.getenv("HTTPCLIENT_TIMEOUT_SECONDS", "")
 ```
 
-This pattern works well when the number of fields is small, each field has a clear meaning, and you want deployers to override individual values directly.
-
 #### Pattern B: fixed-path file config
 
-This pattern works well for:
+Good for:
 
 - larger JSON or YAML
 - structured configuration
 - certificates, keys, and secret files
 - content that is easier to manage as a mounted file
 
-For example, declare a fixed in-container path in `settings.files`:
+Declare a fixed in-container path in `settings.files`:
 
 ```json
 "files": [
@@ -298,7 +299,7 @@ For example, declare a fixed in-container path in `settings.files`:
 ]
 ```
 
-In the generated compose service, this becomes a bind mount. Your app can then read that fixed path directly:
+The app then reads that path directly:
 
 ```python
 from pathlib import Path
@@ -306,27 +307,26 @@ from pathlib import Path
 payload = Path("/myconfig.json").read_text(encoding="utf-8")
 ```
 
-This pattern is especially useful when your app wants to own a full config-file format instead of splitting every field into separate environment variables.
-
 #### Choosing env var vs file
-
-Use these rules of thumb:
 
 - small values or small JSON payloads: prefer env vars
 - larger or structured config: prefer files
 - certificates, keys, and secret files: usually prefer files
 - if your app supports both env and file, define a fixed precedence order inside the app, for example env first and file second
 
-The SDK will not decide that precedence for you. That precedence is part of your app contract and should be documented by the app itself.
+The SDK does not decide that precedence; it is part of your app contract and should be documented by the app itself.
 
 ## Message Model
 
-### Runtime Terms
+NeoFlow nodes talk to each other over MQTT: one data message is one MQTT payload, encoded in CBOR — a compact binary format. You never build or parse that payload yourself — `msg.to_dict()` / `msg.to_dataclass(...)` decode what arrives, and `ctx.publish(...)` encodes what you send. This section describes both ends: what your handler receives from `ctx.messages()`, and what `publish` sends.
 
-Important runtime terms:
+The message format in one paragraph: a data message is a CBOR map with three top-level keys — `source` (text), `timestamp` (RFC3339 text), and `data`. `data` is a flat map from each field key directly to its native CBOR value, with no per-field type wrapper. An undefined field is CBOR null (or the key is simply absent). `raw` fields are native CBOR byte strings, not base64 text. The move to CBOR covers data messages only: the error topic payload stays JSON and heartbeats stay empty — both guarded by `tests/test_runtime.py`. `tests/test_golden.py` replays a fixture recorded from a live peer node through the Python encode/decode path to keep the format from drifting.
+
+### Runtime Terms
 
 - `node`: one NeoEdgeX node configuration matched to your app
 - `handle`: an input or output port name such as `input1` or `output1`
+- `tag`: one named field of an input or output schema — the `key` / `type` pair, for example `{ "key": "temperature", "type": "double" }`
 - `mock mode`: a local SDK mode that injects synthetic messages without a live platform
 <img width="200" height="61"  src="./assets/node-diagram.png" />
 
@@ -338,203 +338,316 @@ Each handler receives a `neoedgex.NodeEnv`.
 
 - `node_config()` to read raw node configuration, including `data.settings`, `data.inputs`, and `data.outputs`
 - `messages()` to receive incoming `neoedgex.Message`
-- `context()` to get the lifecycle signal for this node, suitable for HTTP, DB, gRPC, worker loops, and other long-running work
+- `context()` to get the lifecycle signal for this node — a `threading.Event` that is set when the node should stop; pass it to workers, HTTP, DB, gRPC, and other long-running work
 - `logger()` to get the SDK-provided node-scoped logger
 - `publish(handle: str, data: dict[str, object])` to emit on the specified output handle
 - `report_error(code, err)` to report platform-visible node errors
-- `stop()` to ask the SDK to stop this node, typically after the handler decides it cannot continue because of a fatal error
+- `stop()` to ask the SDK to stop this node, for a fatal error the handler cannot continue past
 
 `neoedgex.Message` contains:
 
 - `handle`: which input handle triggered this message
-- `data`: a `dict[str, object]` containing native Python values decoded from inbound NeoFlow fields
+- `raw`: the `data` section of the received message exactly as it arrived, still CBOR-encoded; you do not read it directly — decode it with `msg.to_dict()` or `msg.to_dataclass(...)`
 - `source`: source node ID
-- `timestamp`: upstream publish time in RFC3339 format; empty string when the upstream payload does not provide it
+- `timestamp`: the time the upstream node published, in RFC3339 format. It is written from that node's own clock, so expect a local offset such as `+08:00` rather than `Z` unless the machine runs on UTC. It is an empty string when the upstream payload carries no time, which is the case for every mock-injected message
 
 ### Reading Input Values
 
-The `msg.data` you read in the handler already contains native Python values.
+`msg.raw` holds the `data` section of the received message, still CBOR-encoded. Call `msg.to_dict()` to decode it into a `dict[str, Any]` of native Python values:
 
-You only need to check two things: whether the key exists, and whether the value is `None`.
+- every field declared in the input schema is decoded as the Python type of the `type` declared for that tag (see the tables below)
+- a field is `None` when it is **undefined**: the upstream node did not produce it (CBOR null), the key is absent from the received message, or the received value could not be read or converted to the schema type
+- when the type of a received value differs from the schema type, the SDK converts it using the same cross-type conversion rules used on the publish side (integer range checks, float-to-int truncation, string-to-number parsing, NaN/Inf rejected); if the rules do not allow the conversion or it fails, the field is delivered as `None`
+- keys that appear in the received message but are **not** declared in the input schema are passed through as the plain Python value the decoder produces (see the tables below) and a debug log; a value the SDK delivers no Python type for arrives as `None` instead
 
-Assume the incoming payload is:
+`to_dict()` decodes once and caches internally: every call returns a **fresh, equal** dict, so mutating one returned dict is never visible to any other reader of the same message.
+
+First dispatch on `msg.handle` to know which input the message came from, then check whether each expected key exists and whether the value is `None`.
+
+Consider an input schema declaring a `double` field and a `string` field. Decoding the message gives:
+
+> This example is executed as-is by [`tests/test_guide_examples.py`](../tests/test_guide_examples.py).
 
 ```python
-from datetime import datetime, UTC
+from neoedgex import DataType
+from neoedgex import testutil
 
-neoedgex.Message(
-    handle="input1",
-    source="upstream-node",
-    timestamp="2026-03-31T09:10:11Z",
-    data={
-        "temperature": 25.5,
-        "running": True,
-        "capturedAt": None,
-    },
-)
+# One message as the handler would receive it from ctx.messages();
+# testutil builds the same thing in a test.
+msg = testutil.new_message("input1", {
+    "temperature": (25.5, DataType.DOUBLE),
+    "deviceName": ("sensor-1", DataType.STRING),
+})
+# msg.handle == "input1", msg.source == "upstream-node"
+
+data = msg.to_dict()
+# data == {"temperature": 25.5, "deviceName": "sensor-1"}
 ```
 
-Inside the handler, read it like this:
+Always take the message from `ctx.messages()`. A `neoedgex.Message` you construct yourself carries neither data nor an input schema, so `to_dict()` on it returns `{}`; to build one in a test, use `testutil.new_message` (see Unit Test Helper).
+
+Apply the same defensive pattern to each field: check whether the key exists, then whether the value is `None`, then check the type. Using `temperature`:
+
+> This handler is executed as-is by [`tests/test_guide_examples.py`](../tests/test_guide_examples.py).
 
 ```python
-from datetime import datetime
 import neoedgex
 
 
-class ExampleApp:
+class TemperatureApp:
     def handle(self, ctx: neoedgex.NodeEnv) -> None:
         for msg in ctx.messages():
             if msg.handle != "input1":
+                # Handle not defined in the schema: ignore it.
                 continue
 
-            temperature: float
-            if "temperature" not in msg.data:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema does not define tag temperature"))
+            data = msg.to_dict()
+            if "temperature" not in data:
+                ctx.report_error(
+                    neoedgex.CodeProcessError,
+                    RuntimeError("internal error: input1 schema does not define tag temperature"),
+                )
                 continue
-            elif msg.data["temperature"] is None:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("temperature was not successfully produced by the upstream node"))
+            value = data["temperature"]
+            if value is None:
+                ctx.report_error(
+                    neoedgex.CodeProcessError,
+                    RuntimeError("temperature was not successfully produced by the upstream node"),
+                )
                 continue
-            elif not isinstance(msg.data["temperature"], float):
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema does not define tag temperature as float"))
+            if not isinstance(value, float):
+                ctx.report_error(
+                    neoedgex.CodeProcessError,
+                    RuntimeError("internal error: tag temperature has an unexpected type, expected float"),
+                )
                 continue
-            else:
-                temperature = msg.data["temperature"]
 
-            running: bool
-            if "running" not in msg.data:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema does not define tag running"))
-                continue
-            elif msg.data["running"] is None:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("running was not successfully produced by the upstream node"))
-                continue
-            elif not isinstance(msg.data["running"], bool):
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema does not define tag running as bool"))
-                continue
-            else:
-                running = msg.data["running"]
-
-            captured_at: datetime
-            if "capturedAt" not in msg.data:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema does not define tag capturedAt"))
-                continue
-            elif msg.data["capturedAt"] is None:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("capturedAt was not successfully produced by the upstream node"))
-                continue
-            elif not isinstance(msg.data["capturedAt"], datetime):
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema does not define tag capturedAt as datetime"))
-                continue
-            else:
-                captured_at = msg.data["capturedAt"]
-
-            _ = temperature, running, captured_at
+            ctx.publish("output1", {"power": value * 2})
 ```
 
-Treat `msg.data` with this fixed meaning:
+Other types follow the same flow with a different type in the `isinstance` check. When the tag is an integer type, remember that `bool` is an `int` subclass in Python — check `isinstance(value, bool)` first if your app must not accept `True` as `1`.
 
-- `key not in msg.data`: your app is trying to read a tag that is not defined in the input schema, so treat it as an internal error
-- `key in msg.data and value is None`: the previous node did not successfully produce that tag; whether to apply a default, skip, or report a process error is up to your app
-- `key in msg.data and value is not None`: proceed with the normal Python type check and business logic; the value type will always match the tag format in the input schema, as shown below:
+What the decoded dict means:
 
-| format | Python type seen by the handler |
+- `key not in data`: either your app is reading a tag that is not defined in the input schema — an internal error — or the whole `data` section could not be read, in which case `to_dict()` returns `{}` and every key is missing
+- `key in data and data[key] is None`: the field is undefined — the previous node did not successfully produce that tag, the key was absent from the received message, or the value could not be read or converted to the schema type; whether to apply a default, skip, or report a process error is up to your app
+- `key in data and data[key] is not None`: proceed with the Python type check; the value type follows the two tables below
+
+#### Which Python Type a Value Arrives As
+
+**Tag declared in the input schema.** When there is a value, it arrives as the Python type of the declared `type`; when there is none it arrives as `None`, as the two rules under the table describe:
+
+| type | Python type seen by the handler |
 | --- | --- |
 | `bool` | `bool` |
 | `int16` | `int` |
 | `int32` | `int` |
 | `int64` | `int` |
-| `second` | `datetime.datetime` |
-| `millisecond` | `datetime.datetime` |
 | `uint16` | `int` |
 | `uint32` | `int` |
 | `uint64` | `int` |
 | `float` | `float` |
 | `double` | `float` |
 | `string` | `str` |
-| `datetime` | `datetime.datetime` |
-| `base64` | `bytes` |
+| `raw` | `bytes` |
 
-### Dispatching Across Multiple Input Handles
+> The delivery rules in this section are executed value by value by [`tests/test_type_table.py`](../tests/test_type_table.py) — when the implementation drifts from them, that test goes red.
 
-When the node defines more than one input handle, every inbound message still arrives on the same `ctx.messages()` stream — the handler tells them apart by `msg.handle`. A common pattern is to branch on `msg.handle`, prepare per-handle work, and publish to the appropriate output:
+Python has one unbounded `int` and one `float` (a 64-bit double), so the declared type does not pick a distinct Python type — it picks the **range check** on the way in and the **CBOR encoding** on the way out. Declaring `float` is not a label — it decides the narrowing, the range check, and the restore behavior.
+
+Two rules apply on top of the table:
+
+- if the upstream node sent a decimal number as single precision into a `double` tag, or as double precision into a `float` tag, the SDK normalizes it through the conversion rules and restores the shortest decimal: `25.34` sent as a single-precision number into a `double` tag arrives as `25.34`, not `25.34000015258789`
+- if the value does not fit the declared type — for example `1e300` into a `float` tag — the conversion fails and the field arrives as `None`
+
+**Tag not declared in the input schema.** The value is passed through as whatever the decoder produces, with no schema conversion. These are the only Python types delivered this way:
+
+| what the upstream node sent | Python type seen by the handler |
+| --- | --- |
+| a decimal number, at any precision | `float` |
+| a whole number from -9223372036854775808 to 18446744073709551615 | `int` |
+| text | `str` |
+| `true` / `false` | `bool` |
+| binary data | `bytes` |
+| anything else — a list, a nested structure, or a whole number outside the range above | `None` (undefined) |
+
+A value the upstream sent as single precision arrives as the restored shortest decimal (`25.34`) on a key declared `float` or `double`; an undeclared key has no declared precision to restore against, so it arrives as the widened residue (`25.34000015258789`) — not data corruption, just how much information 32 bits carry.
+
+The last row is a closed rule: the Python types listed above are everything the SDK delivers, and any other value arrives as `None`, with the key still present and a warning in the log. Lists and nested structures are never delivered — no tag type can declare one, so they only reach you from a sender that does not use this SDK, and they arrive as a single `None` for the whole value rather than partially. Whole numbers are the case you can hit in practice — they arrive as a number only inside the range listed above, even though Python itself could hold a bigger one.
+
+Two CBOR tag cases round out the foreign-sender rules; both are pinned in `tests/test_golden.py`:
+
+- **Time tags (tag 0 / tag 1).** No declarable type produces them. A declared field that receives one is delivered as undefined (`None`): the decoder yields a `datetime`, and `datetime` is not a type a data message carries.
+- **Bignum tags (tag 2 / tag 3).** The SDK never sends one. The decoder absorbs the tag before any schema rule runs, so a bignum wrapping an integer that fits a normal CBOR integer arrives as that `int` on the undeclared path, and a declared numeric field applies its normal range rules to the wrapped integer.
+
+**Anything the SDK cannot decode, convert, or represent arrives as `None`.** The key stays in the dict with a `None` value. That single rule covers every "no value" case: the upstream node produced no value, the key was missing from the received message, the value did not fit the declared type, the value could not be read at all, or the value has no Python type the SDK delivers.
+
+There is one case where a key is not in the dict at all: a message whose whole `data` section is unreadable, which is what a corrupt payload looks like. `to_dict()` then returns `{}` — not even the schema keys — with a warning in the log.
+
+### Decoding into a Dataclass
+
+`msg.to_dataclass(SomeDataclass)` decodes the data map directly into a dataclass instance. It plays the role a validation library would otherwise play: for reading NeoFlow messages you do not need pydantic, the SDK's built-in decoder covers the schema-driven part.
+
+The rules, all pinned in `tests/test_message.py`:
+
+- **Target.** Only a dataclass *type* is accepted — an instance, a plain class, or `dict` raises `TypeError`. Every call builds and returns a **new** instance.
+- **Key mapping.** The data-map key defaults to the field name; `field(metadata={"key": "deviceName"})` overrides it.
+- **Undefined fields.** When the key is absent or the value is CBOR null, the field's declared default (or `default_factory`) stands. A field with no default is set to `None`.
+- **The declaration wins.** A value that arrives as the CBOR kind matching the field's annotation is decoded directly as declared, and the input schema plays no part. `int` spans the int64 domain: any integer that arrives inside it, whatever the schema says, and one outside it raises. `float` follows the width the value was sent at: a single-precision value is restored to its shortest-decimal form (25.34, not 25.34000015258789), a double-precision value is taken as-is, and an arriving integer also decodes into a `float` annotation. `str`, `bytes` and `bool` take their own CBOR kinds directly.
+- **Present but bad values.** When a value arrives as a kind that does not match the annotation, it is decoded by the input schema instead. Two cases then take this path: the upstream node sent a non-null value that could not be decoded into the schema type (`to_dict()` delivers `None` with a warning), and a schema-decoded value that does not fit the field's annotation. Either way, every concrete annotation — `float` and `float | None` alike — makes the whole call raise `ValueError` naming the field. Only the accept-as-is annotations (`Any`, `object`, missing) stay quiet: an undecodable value leaves such a field `None` with a log line. The declared default never stands in for a bad value — defaults cover only absent or null keys. Declare `X | None` for a field that may legitimately carry no value: `None` then means exactly "null or absent", which keeps the "real zero vs no value" distinction — a real `0.0` arrives as `0.0`, an undefined field as `None`, and a bad value raises.
+- **Annotation handling on schema values.** On that schema route, the value's type must be the annotation's type — an `int` value does not widen into a `float` annotation. An `int` annotation never accepts a `bool` (`bool` is an `int` subclass in Python; the CBOR types are unrelated). `Any`, `object`, missing annotations, containers, and multi-type unions always accept the schema-decoded value as-is — for them there is no declaration to win.
+- **`init=False` fields are skipped** — they cannot be passed to the constructor, so they keep whatever their own initialization produces.
+- **All or nothing.** A failed call never leaves a half-written target: `to_dataclass` either returns a complete new instance or raises.
+
+The two accessors split cleanly: `to_dict()` trusts the input schema, `to_dataclass` trusts your declaration. Python type hints carry no width — `int16` and `int64` are both `int`, `float32` and `float64` both `float` — so a declaration picks the kind, never a width: `int` behaves as a declared `int64`, and `float` follows the width the value was sent at, as described above.
+
+The example below runs as it stands. `testutil.new_message(...)` builds the message your handler would receive from `ctx.messages()`; in your own app `msg` comes from that stream and a decode error goes to `ctx.report_error(...)` instead of propagating.
+
+> This example is executed as-is by [`tests/test_guide_examples.py`](../tests/test_guide_examples.py).
 
 ```python
-import neoedgex
+from dataclasses import dataclass, field
+from typing import Any
+
+from neoedgex import DataType
+from neoedgex import testutil
+
+# msg is one message from ctx.messages(); testutil builds the same thing in
+# a test. Next to each value is the type the receiving node's input schema
+# declares that key as, while testutil.UNDECLARED marks the keys the schema
+# does not declare at all.
+msg = testutil.new_message("input1", {
+    "temperature": (None, DataType.DOUBLE),   # upstream produced no value
+    "offset": (0.0, DataType.DOUBLE),         # upstream produced a real 0
+    "count": (None, DataType.INT64),          # upstream produced no value
+    "ratio": (testutil.Single(25.34), DataType.FLOAT),
+    "level": (25.34, DataType.DOUBLE),
+    "restored": (testutil.Single(25.34), testutil.UNDECLARED),
+    "seq": (5, testutil.UNDECLARED),
+    "total": (18446744073709551615, testutil.UNDECLARED),
+    "deviceName": ("sensor-1", testutil.UNDECLARED),
+    "running": (True, testutil.UNDECLARED),
+    "payload": (b"\x01\x02", testutil.UNDECLARED),
+})
 
 
-class ExampleApp:
-    def handle(self, ctx: neoedgex.NodeEnv) -> None:
-        for msg in ctx.messages():
-            if msg.handle == "input1":
-                temperature = msg.data.get("temperature")
-                # ... handle input1 ...
-                ctx.publish("output1", {"api_path": "/temperature", "response_status": 200})
-            elif msg.handle == "input2":
-                running = msg.data.get("running")
-                # ... handle input2 ...
-                ctx.publish("output1", {"api_path": "/status", "response_status": 200})
-            elif msg.handle == "input3":
-                message = msg.data.get("message")
-                # ... handle input3 ...
-                ctx.publish("output1", {"api_path": "/event", "response_status": 200})
-            else:
-                # Unknown handle — ignore.
-                continue
+@dataclass
+class Reading:
+    temperature: float | None = None  # no value -> the default None stands
+    offset: float | None = None       # real 0 -> 0.0
+    count: int = 0                    # no value -> default 0: a real 0 looks the same
+    ratio: float = 0.0                # sent at single precision -> restored 25.34
+    level: float = 0.0                # sent at double precision -> 25.34
+    restored: float = 0.0             # not declared in the schema; the annotation
+                                      # still wins -> restored 25.34 (to_dict(),
+                                      # trusting the schema, would widen it)
+    seq: int = 0                      # not declared -> 5
+    total: Any = 0                    # above the int64 domain: an `int`
+                                      # annotation would raise; Any takes the
+                                      # natural int
+    device_name: str = field(default="", metadata={"key": "deviceName"})
+    running: bool = False             # not declared -> True
+    payload: bytes = b""              # not declared -> b"\x01\x02"
+
+
+reading = msg.to_dataclass(Reading)
+assert reading == Reading(
+    temperature=None,
+    offset=0.0,
+    count=0,
+    ratio=25.34,
+    level=25.34,
+    restored=25.34,
+    seq=5,
+    total=18446744073709551615,
+    device_name="sensor-1",
+    running=True,
+    payload=b"\x01\x02",
+)
 ```
 
-The handle string passed to `ctx.publish(...)` must match a key in the node config's `outputs` map; otherwise the call raises.
+And the two sides of the incompatibility rule:
+
+> This example is executed as-is by [`tests/test_guide_examples.py`](../tests/test_guide_examples.py).
+
+```python
+from dataclasses import dataclass
+from typing import Any
+
+import pytest
+
+from neoedgex import DataType
+from neoedgex import testutil
+
+# The upstream node sent text where the dataclass expects a number.
+msg = testutil.new_message("input1", {"count": ("not-a-number", DataType.STRING)})
+
+
+@dataclass
+class Strict:
+    count: int = 0
+
+
+@dataclass
+class Pointer:
+    count: int | None = None
+
+
+@dataclass
+class Loose:
+    count: Any = None
+
+
+with pytest.raises(ValueError):   # bare int: the whole call aborts
+    msg.to_dataclass(Strict)
+
+with pytest.raises(ValueError):   # int | None aborts the same way
+    msg.to_dataclass(Pointer)
+
+assert msg.to_dataclass(Loose).count == "not-a-number"  # Any: delivered as-is
+```
 
 ### Publish Rules
 
-`publish` currently behaves like this:
+`publish` behaves like this:
 
-- the first argument selects the output handle; the SDK builds the payload against the schema declared under that handle in the node config
-- if the handle is not defined in the node's `outputs`, the call raises
-- if an output field defined in schema is missing from your `data`, the SDK fills it with an empty field
-- if you explicitly provide a field with `None`, the SDK also turns it into an empty field
-- keys in your `data` dict that are not defined in the chosen handle's schema are silently ignored and will not appear in the published payload
-- `ctx.publish(handle, {...})` accepts ordinary Python values, and the handler also reads ordinary Python values from `msg.data`
+- it builds payloads against the schema defined under the `handle` argument; the handle must exist in `config.data.outputs`, otherwise `publish` raises `ValueError`
+- if an output field defined in schema is missing from your `data`, the SDK publishes it as CBOR null (undefined)
+- if you explicitly provide a field with `None`, the SDK also publishes it as CBOR null
+- keys in your `data` dict that are not defined in that output schema are dropped (with a warning log) and will not appear in the published payload
+- `ctx.publish(handle, {...})` accepts ordinary Python values, and the handler also reads ordinary Python values from `msg.to_dict()`
+- a field declared `float` is narrowed to single precision before it is sent; a value whose magnitude is beyond the single-precision range (for example `1e300`) goes out as CBOR null for that field, with a node error reported
+- `publish` raises in two cases only: the handle does not exist in `config.data.outputs`, or the MQTT publish fails. A field the SDK cannot convert to its schema type is **not** one of them: that field goes out as CBOR null, the SDK reports the failure to the platform on your behalf, and `publish` returns normally. Do not read a quiet return as "every field went out the way I meant it"
+
+Those rules are pinned in `tests/test_runtime.py`.
 
 Concrete example for missing output fields:
 
 ```python
 # output1 schema:
-# - power: type=double, format=double
-# - status: type=string, format=string
+# - power: type=double
+# - status: type=string
 
-ctx.publish(
-    "output1",
-    {
-        "power": 42.0,
-    },
-)
+ctx.publish("output1", {"power": 42.0})
 ```
 
-The SDK publishes `power` from your value and fills `status` with an empty field because it exists in schema but was omitted from `data`. Passing `status=None` produces the same result.
-
-An omitted schema field is not dropped; it is published as an explicit empty field.
+The SDK publishes `power` from your value and publishes `status` as CBOR null, because it exists in schema but was omitted from `data`; the downstream handler reads it as `None` (undefined). Passing `status=None` produces the same result:
 
 ```python
 try:
-    ctx.publish(
-        "output1",
-        {
-            "power": 42.0,
-            "status": None,
-        },
-    )
+    ctx.publish("output1", {"power": 42.0, "status": None})
 except Exception as err:
     ctx.report_error(neoedgex.CodeProcessError, err)
 ```
 
-This means you are explicitly publishing `status` as an empty field. Omitting `status` entirely has the same effect.
-
 ### Python Value Conversion
 
-When you publish output fields with `ctx.publish(handle, {...})`, conversion is controlled by the destination format defined in the chosen output handle's schema.
+`ctx.publish` conversion is controlled by the destination type defined under that handle's schema. The converted value is sent as a native CBOR value of that type. The engine is `neoedgex.convert_to_typed_value(value, dest_type)`, which you can also call directly.
 
 <table>
   <thead>
     <tr>
-      <th>Destination format</th>
+      <th>Destination type</th>
       <th>Python value category</th>
       <th>Conversion rule</th>
       <th>Example</th>
@@ -545,111 +658,87 @@ When you publish output fields with `ctx.publish(handle, {...})`, conversion is 
     <tr>
       <td rowspan="2"><code>bool</code></td>
       <td><code>bool</code></td>
-      <td><code>True -&gt; "true"</code>, <code>False -&gt; "false"</code></td>
-      <td><code>True -&gt; "true"</code></td>
+      <td>Kept unchanged.</td>
+      <td><code>True -&gt; True</code></td>
       <td rowspan="2">Plain <code>str</code> is not accepted.</td>
     </tr>
     <tr>
-      <td>integers, floats</td>
-      <td>Zero / non-zero semantics: <code>0</code> or <code>0.0</code> becomes <code>"false"</code>; any other value becomes <code>"true"</code>.</td>
-      <td><code>0 -&gt; "false"</code>; <code>3.14 -&gt; "true"</code></td>
+      <td><code>int</code>, <code>float</code></td>
+      <td>Zero / non-zero semantics: <code>0</code> or <code>0.0</code> becomes <code>False</code>; any other value becomes <code>True</code>.</td>
+      <td><code>0 -&gt; False</code>; <code>3.14 -&gt; True</code></td>
     </tr>
     <tr>
       <td rowspan="4"><code>int16</code>, <code>int32</code>, <code>int64</code></td>
       <td><code>int</code></td>
-      <td>Converted to the target width with range checks.</td>
-      <td><code>42 -&gt; "42"</code></td>
-      <td rowspan="4"><code>NaN</code>, <code>Inf</code>, out-of-range values, <code>datetime.datetime</code>, and <code>bytes</code> fail.</td>
+      <td>Range-checked against the declared width.</td>
+      <td>destination <code>int64</code> + <code>42 -&gt; 42</code></td>
+      <td rowspan="4"><code>NaN</code>, <code>Inf</code>, out-of-range values, <code>datetime</code>, and <code>bytes</code> fail.</td>
     </tr>
     <tr>
       <td><code>float</code></td>
-      <td>Fractional parts are truncated first, then the value is converted with range checks.</td>
-      <td>destination <code>int64</code> + <code>12.9 -&gt; "12"</code></td>
+      <td>Fractional parts are truncated first, then the value is range-checked.</td>
+      <td>destination <code>int64</code> + <code>12.9 -&gt; 12</code></td>
     </tr>
     <tr>
       <td><code>bool</code></td>
-      <td><code>True</code> becomes <code>1</code> or <code>0</code>.</td>
-      <td>destination <code>int32</code> + <code>True -&gt; "1"</code></td>
+      <td><code>True</code> becomes <code>1</code>, <code>False</code> becomes <code>0</code>.</td>
+      <td>destination <code>int32</code> + <code>True -&gt; 1</code></td>
     </tr>
     <tr>
       <td>numeric <code>str</code></td>
-      <td>Numeric strings must parse as the exact destination format.</td>
-      <td>destination <code>int16</code> + <code>"42" -&gt; "42"</code></td>
+      <td>Parsed strictly as an integer (no underscores, no surrounding whitespace), then range-checked.</td>
+      <td>destination <code>int16</code> + <code>"42" -&gt; 42</code></td>
     </tr>
     <tr>
       <td rowspan="4"><code>uint16</code>, <code>uint32</code>, <code>uint64</code></td>
       <td><code>int</code></td>
-      <td>Converted to the target uint width only if the resulting value is non-negative and within range.</td>
-      <td>destination <code>uint32</code> + <code>42 -&gt; "42"</code></td>
+      <td>Accepted only when non-negative and within the declared width.</td>
+      <td>destination <code>uint32</code> + <code>42 -&gt; 42</code></td>
       <td rowspan="4">Negative values, <code>NaN</code>, <code>Inf</code>, and out-of-range values fail.</td>
     </tr>
     <tr>
       <td><code>float</code></td>
-      <td>Fractional parts are truncated first, then the value is converted with uint range checks.</td>
-      <td>destination <code>uint64</code> + <code>12.9 -&gt; "12"</code></td>
+      <td>Fractional parts are truncated first, then the value is range-checked.</td>
+      <td>destination <code>uint64</code> + <code>12.9 -&gt; 12</code></td>
     </tr>
     <tr>
       <td><code>bool</code></td>
-      <td><code>True</code> becomes <code>1</code> or <code>0</code>.</td>
-      <td>destination <code>uint32</code> + <code>True -&gt; "1"</code></td>
+      <td><code>True</code> becomes <code>1</code>, <code>False</code> becomes <code>0</code>.</td>
+      <td>destination <code>uint32</code> + <code>True -&gt; 1</code></td>
     </tr>
     <tr>
       <td>numeric <code>str</code></td>
-      <td>Numeric strings must parse as the exact destination format.</td>
-      <td>destination <code>uint32</code> + <code>"42" -&gt; "42"</code></td>
+      <td>Parsed strictly as an integer, then range-checked.</td>
+      <td>destination <code>uint32</code> + <code>"42" -&gt; 42</code></td>
     </tr>
     <tr>
       <td rowspan="4"><code>float</code>, <code>double</code></td>
       <td><code>int</code></td>
-      <td>Converted to the destination float format and serialized in scientific notation.</td>
-      <td>destination <code>double</code> + <code>42 -&gt; "4.2e+01"</code></td>
-      <td rowspan="4"><code>datetime.datetime</code> and <code>bytes</code> are not accepted.</td>
+      <td>Converted to the destination float precision.</td>
+      <td>destination <code>double</code> + <code>42 -&gt; 42.0</code></td>
+      <td rowspan="4"><code>NaN</code>, <code>Inf</code>, <code>datetime</code>, and <code>bytes</code> are not accepted. Destination <code>float</code> rejects magnitudes beyond float32 range.</td>
     </tr>
     <tr>
       <td><code>float</code></td>
-      <td>Converted to the destination precision.</td>
-      <td>destination <code>float</code> + <code>25.5 -&gt; "2.55e+01"</code></td>
+      <td>Converted to the destination precision: destination <code>float</code> narrows to single precision (shortest decimal), destination <code>double</code> keeps the value.</td>
+      <td>destination <code>float</code> + <code>25.5 -&gt; 25.5</code></td>
     </tr>
     <tr>
       <td><code>bool</code></td>
-      <td><code>True</code> becomes <code>1.0</code> or <code>0.0</code>.</td>
-      <td>destination <code>double</code> + <code>True -&gt; "1e+00"</code></td>
+      <td><code>True</code> becomes <code>1.0</code>, <code>False</code> becomes <code>0.0</code>.</td>
+      <td>destination <code>double</code> + <code>True -&gt; 1.0</code></td>
     </tr>
     <tr>
       <td>numeric <code>str</code></td>
-      <td>Numeric strings must parse as the exact destination float format.</td>
-      <td>destination <code>double</code> + <code>"3.14" -&gt; "3.14e+00"</code></td>
-    </tr>
-    <tr>
-      <td rowspan="2"><code>second</code>, <code>millisecond</code></td>
-      <td>integers, floats</td>
-      <td>Floats are truncated to <code>int</code> first. Numeric values are then interpreted by magnitude: <code>&gt;= 1e17</code> as ns, <code>&gt;= 1e14</code> as us, <code>&gt;= 1e11</code> as ms, otherwise as s. The resulting time is then serialized as Unix seconds or Unix milliseconds.</td>
-      <td>destination <code>second</code> + <code>1711094400.9</code> truncates first</td>
-      <td rowspan="2">Plain <code>str</code> is not accepted for destination time formats.</td>
-    </tr>
-    <tr>
-      <td><code>datetime.datetime</code></td>
-      <td>Converted directly to Unix seconds or Unix milliseconds depending on the destination format.</td>
-      <td>destination <code>millisecond</code> + <code>datetime(2026, 3, 22, 10, 30, 0, tzinfo=UTC)</code> serializes as Unix milliseconds</td>
-    </tr>
-    <tr>
-      <td rowspan="2"><code>datetime</code></td>
-      <td>integers, floats</td>
-      <td>Floats are truncated to <code>int</code> first. Numeric values are then interpreted by magnitude: <code>&gt;= 1e17</code> as ns, <code>&gt;= 1e14</code> as us, <code>&gt;= 1e11</code> as ms, otherwise as s. The resulting time is serialized as RFC3339.</td>
-      <td>destination <code>datetime</code> + <code>1711094400</code> becomes <code>"2024-03-22T00:00:00Z"</code></td>
-      <td rowspan="2">Plain <code>str</code> is not accepted for destination <code>datetime</code>.</td>
-    </tr>
-    <tr>
-      <td><code>datetime.datetime</code></td>
-      <td>Converted directly to RFC3339, for example <code>2026-03-22T10:30:00Z</code>.</td>
-      <td>destination <code>datetime</code> + <code>datetime(2026, 3, 22, 10, 30, 0, tzinfo=UTC) -&gt; "2026-03-22T10:30:00Z"</code></td>
+      <td>Parsed strictly as a decimal number.</td>
+      <td>destination <code>double</code> + <code>"3.14" -&gt; 3.14</code></td>
     </tr>
     <tr>
       <td rowspan="4"><code>string</code></td>
       <td><code>str</code></td>
       <td>Kept unchanged.</td>
       <td><code>"neoedgex" -&gt; "neoedgex"</code></td>
-      <td rowspan="4"><code>datetime.datetime</code> does not automatically convert to plain <code>string</code>; use destination format <code>datetime</code> if you want RFC3339 time text.</td>
+      <td rowspan="4"><code>datetime</code> and <code>bytes</code> are not accepted.</td>
     </tr>
     <tr>
       <td><code>int</code></td>
@@ -667,50 +756,63 @@ When you publish output fields with `ctx.publish(handle, {...})`, conversion is 
       <td><code>True -&gt; "true"</code></td>
     </tr>
     <tr>
-      <td><code>base64</code></td>
+      <td><code>raw</code></td>
       <td><code>bytes</code></td>
-      <td>Bytes are base64-encoded.</td>
-      <td><code>b"hello" -&gt; "aGVsbG8="</code></td>
+      <td>Sent as a native CBOR byte string (no base64). Only <code>raw</code> to <code>raw</code> is allowed; no other type converts to or from <code>raw</code>. <code>bytearray</code> is accepted and sent as <code>bytes</code>.</td>
+      <td><code>b"hello"</code> is carried byte-for-byte.</td>
       <td>Other Python types are not accepted.</td>
     </tr>
   </tbody>
 </table>
 
-The SDK decides whether a value can be converted from the Python value and the destination format declared by the schema. As a third-party app author, you usually only need to care about whether the Python value is accepted by the destination schema format.
+Three Python-specific notes on top of the table:
 
-For example, assume `output1` schema defines this field:
+- **Python `int` is unbounded.** The declared type's range check is what stops a big value: `70000` into an `int16` field fails, and a value outside `[-2**63, 2**64-1]` fails for *every* numeric destination, because no data message can carry it — the SDK never emits a CBOR bignum. Pinned in `tests/test_golden.py` and `tests/test_contract.py`.
+- **`datetime` is rejected for every destination type.** Format time values to a string in the app first (e.g. `value.isoformat()` or `value.strftime(...)`) and declare the field as `string`.
+- Values that are not single scalar values — a dict, a list, a set, an object — are rejected for every destination type: the SDK reports an error and publishes the field as CBOR null.
+
+Some rows of the table, runnable:
+
+> This example is executed as-is by [`tests/test_guide_examples.py`](../tests/test_guide_examples.py).
+
+```python
+import pytest
+
+from neoedgex import DataType, convert_to_typed_value
+
+assert convert_to_typed_value(9527, DataType.BOOL) is True
+assert convert_to_typed_value(12.9, DataType.INT64) == 12
+assert convert_to_typed_value("42", DataType.INT16) == 42
+assert convert_to_typed_value(25.5, DataType.STRING) == "2.55e+01"
+with pytest.raises(ValueError):
+    convert_to_typed_value(70000, DataType.INT16)
+with pytest.raises(ValueError):
+    convert_to_typed_value(float("nan"), DataType.DOUBLE)
+```
+
+The SDK decides whether a value can be converted from the Python value and the destination type declared by the schema. As a third-party app author, you usually only need to care about whether the Python value is accepted by the destination schema type.
+
+Assume `output1` schema defines this field:
 
 ```text
-- enabled: type=bool, format=bool
+- enabled: type=bool
 ```
 
 If you publish this:
 
 ```python
-ctx.publish(
-    "output1",
-    {
-        "enabled": 9527,
-    },
-)
+ctx.publish("output1", {"enabled": 9527})
 ```
 
-The SDK applies the `bool` zero / non-zero rule, so `enabled` is converted to `true`.
+The SDK applies the `bool` zero / non-zero rule, so `enabled` is converted to `True`.
 
 But if you publish this instead:
 
 ```python
-ctx.publish(
-    "output1",
-    {
-        "enabled": "true",
-    },
-)
+ctx.publish("output1", {"enabled": "true"})
 ```
 
-The SDK does not raise. Instead, it silently sets the field to an empty value and internally calls `report_error` to notify the platform.
-
-`publish` only raises in three cases: the chosen output handle is not defined in the node config, JSON serialisation fails, or the MQTT publish fails. Conversion failures are not surfaced through exceptions.
+`publish` does not raise: the SDK publishes `enabled` as CBOR null (undefined) and calls `report_error` to notify the platform on your behalf.
 
 ### Publish Flow
 
@@ -719,77 +821,59 @@ The following is a complete end-to-end example of the publish pipeline.
 Step 1: start from the `output1` schema. For this example, assume `output1` is:
 
 ```text
-- temperature: type=double, format=double
-- running: type=bool, format=bool
-- capturedAt: type=string, format=datetime
+- temperature: type=double
+- running: type=bool
+- capturedAt: type=string
 ```
 
-Step 2: the handler can publish ordinary Python values through `ctx.publish(handle, ...)`:
+Step 2: the handler can publish ordinary Python values through `ctx.publish(...)`. A `string` field expects a Python `str`:
 
 ```python
-from datetime import datetime
 import neoedgex
 
 
 class ExampleApp:
     def handle(self, ctx: neoedgex.NodeEnv) -> None:
-        for msg in ctx.messages():
-            if msg.handle != "input1":
-                continue
-
+        for _msg in ctx.messages():
             try:
                 ctx.publish(
                     "output1",
                     {
                         "temperature": 25.5,
                         "running": True,
-                        "capturedAt": datetime.now().astimezone(),
+                        "capturedAt": "2026-03-22T10:30:00Z",
                     },
                 )
             except Exception as err:
                 ctx.report_error(neoedgex.CodeProcessError, err)
 ```
 
-Step 3: on the publisher side, the SDK turns those Python values into this output payload:
+Step 3: on the publisher side, the SDK converts those Python values to the schema types and encodes the whole message as CBOR. The message has three top-level fields: `source` (the publishing node), `timestamp` (the moment of publication, in RFC3339, taken from the container's clock — so it carries the local UTC offset, not necessarily `Z`), and `data` (your published fields). Shown here in CBOR diagnostic notation, the human-readable rendering of CBOR — each field carries its native value, with no per-field type wrapper:
 
-```json
+```text
 {
   "source": "publisher-node",
+  "timestamp": "2026-03-22T18:30:00+08:00",
   "data": {
-    "temperature": {
-      "type": "double",
-      "format": "double",
-      "value": "2.55e+01"
-    },
-    "running": {
-      "type": "bool",
-      "format": "bool",
-      "value": "true"
-    },
-    "capturedAt": {
-      "type": "string",
-      "format": "datetime",
-      "value": "2026-03-22T10:30:00Z"
-    }
+    "temperature": 25.5,
+    "running": true,
+    "capturedAt": "2026-03-22T10:30:00Z"
   }
 }
 ```
 
-Step 4: when a downstream node receives that payload on its own `input1`, the SDK decodes it before delivery and the handler sees this `neoedgex.Message`:
+Step 4: when a downstream node receives that payload on its own `input1`, the handler decodes it with `msg.to_dict()` and each field arrives as the Python type of the downstream input schema:
 
 ```python
-from datetime import datetime
+# msg.handle == "input1", msg.source == "publisher-node",
+# msg.timestamp == "2026-03-22T18:30:00+08:00"
 
-neoedgex.Message(
-    handle="input1",
-    source="publisher-node",
-    timestamp="2026-03-22T10:30:00Z",
-    data={
-        "temperature": 25.5,
-        "running": True,
-        "capturedAt": datetime.fromisoformat("2026-03-22T10:30:00+00:00"),
-    },
-)
+data = msg.to_dict()
+# data == {
+#     "temperature": 25.5,             # double -> float
+#     "running": True,                 # bool -> bool
+#     "capturedAt": "2026-03-22T10:30:00Z",  # string -> str
+# }
 ```
 
 ## Mock Development Flow
@@ -803,7 +887,7 @@ from neoedgex import mock
 
 class ExampleApp:
     def handle(self, ctx: neoedgex.NodeEnv) -> None:
-        for msg in ctx.messages():
+        for _msg in ctx.messages():
             try:
                 ctx.publish("output1", {"value": "ok"})
             except Exception as err:
@@ -821,6 +905,8 @@ if __name__ == "__main__":
 
 Minimal mock config shape:
 
+> This config is loaded as-is by [`tests/test_guide_examples.py`](../tests/test_guide_examples.py).
+
 ```json
 {
   "nodes": [
@@ -831,17 +917,17 @@ Minimal mock config shape:
         "name": "demo-node",
         "inputs": {
           "input1": [
-            { "key": "temperature", "type": "double", "format": "double" }
+            { "key": "temperature", "type": "double" }
           ]
         },
         "outputs": {
           "output1": [
-            { "key": "value", "type": "string", "format": "string" }
+            { "key": "value", "type": "string" }
           ]
         },
         "application": {
           "key": "demo-app",
-          "version": "1.1.1"
+          "version": "2.0.0"
         },
         "settings": {}
       }
@@ -856,7 +942,6 @@ Minimal mock config shape:
         "data": {
           "temperature": {
             "type": "double",
-            "format": "double",
             "value": "2.55e+01"
           }
         }
@@ -866,26 +951,59 @@ Minimal mock config shape:
 }
 ```
 
-`neoedgex.load_mock_config(...)` is a convenience wrapper around `neoedgex.mock.load_config(...)`. If your mock main already imports `neoedgex.mock`, prefer keeping `neoedgex.mock.load_config(...)` so the mock configuration source stays explicit.
+What that file has to get right:
+
+- `mock.messages[].nodeID` must be exactly one of the `nodes[].id` values, and `handle` should be one the same node declares under `inputs`. A `handle` the node does not declare still delivers, but with no input schema behind it, so every value arrives untyped over the bypass path.
+- messages are injected one per tick, cycling through the list from the top and starting about half a second after the app comes up. To exercise several inputs, list one message per input and let them rotate.
+- `messageInterval` is a duration string: one or more number-plus-unit tokens, decimals allowed, with units `ns`, `us`, `ms`, `s`, `m`, `h` — such as `"3s"`, `"500ms"`, `"1.5s"` or `"1m30s"`. Missing, unparseable, or not positive falls back to 3s, with no error.
+- injected values keep the stringified `type`/`value` form: floats in scientific notation (`"2.55e+01"`), `raw` as base64 text, bool as `"true"` / `"false"`. The SDK converts each entry to its native value at injection time and encodes a real CBOR message, so the handler sees the same decoded values as in production. An entry with an empty `type` injects an undefined field, which is how you exercise the `None` path. A legacy `format` key on an entry or a schema field is tolerated and ignored (pinned in `tests/test_mock.py`).
+- every injected message arrives with `source` `"mock"` and an empty `timestamp`.
+- there is no broker, so what your handler publishes is visible only in the log, as `[MOCK PUBLISH]` lines carrying the topic and the decoded payload. Heartbeats appear the same way, with an empty payload. `disable_sdk_log()` hides all of it.
+
+`neoedgex.load_mock_config(...)` is a convenience wrapper around `neoedgex.mock.load_config(...)`. If your mock main already imports `neoedgex.mock`, prefer keeping `mock.load_config(...)` so the mock configuration source stays explicit.
 
 Do not enable mock mode in production deployment.
 
 ## Unit Test Helper
 
-When unit-testing your own `NodeHandler`, use `neoedgex.testutil.MockNodeEnv` to create a test `NodeEnv`. It lets you set `config`, `message_iterable`, `done_event`, `mock_logger`, and `publish_error`, and records `published_data`, `reported_errors`, and `stop_called` after the handler runs. Each publish call is appended as a `PublishedMessage(handle, data)` so tests can assert which output handle was used.
+`neoedgex.testutil` runs your `NodeHandler` without a platform and without a broker:
+
+- `MockNodeEnv` stands in for the `NodeEnv` the SDK passes to `handle`. Set `config` to the node configuration under test, and optionally `mock_logger`, `done_event` (setting it "cancels" `ctx.context()`) and `publish_error` (the exception every `publish` call raises). After the handler has finished, read `published_data`, `reported_errors` and `stop_called`. `stop()` only records `stop_called` — it does not set `done_event`; a test whose handler must observe cancellation sets `done_event` itself.
+- `env.new_message(handle, data)` builds an incoming message from the input schema in `config`, so its fields decode to exactly the types the SDK would deliver in production. It raises if `handle` is not declared in `config.data.inputs`. A schema key missing from `data` is delivered as `None`, like a value the upstream never produced.
+- assign `env.message_iterable` (any iterable of messages) to feed the handler; when the iterable is exhausted the `for msg in ctx.messages()` loop ends, which is what lets the test assert afterwards.
+
+> This test is executed as-is by [`tests/test_guide_examples.py`](../tests/test_guide_examples.py).
 
 ```python
+from neoedgex import DataType
+from neoedgex.contract import Node, NodeData, PortFieldSchema
 from neoedgex.testutil import MockNodeEnv, PublishedMessage
 
-ctx = MockNodeEnv(
-    config=node_config,
-    message_iterable=messages,
-)
 
-handler.handle(ctx)
+def test_example_app() -> None:
+    env = MockNodeEnv(
+        config=Node(
+            id="node-1",
+            data=NodeData(
+                name="demo-node",
+                inputs={"input1": [PortFieldSchema(key="temperature", type=DataType.DOUBLE)]},
+                outputs={"output1": [PortFieldSchema(key="power", type=DataType.DOUBLE)]},
+            ),
+        )
+    )
+    env.message_iterable = [env.new_message("input1", {"temperature": 25.5})]
 
-assert ctx.published_data == [PublishedMessage(handle="output1", data={"value": "ok"})]
+    ExampleApp().handle(env)
+
+    assert env.published_data == [PublishedMessage(handle="output1", data={"power": 42.0})]
 ```
+
+Things to keep in mind:
+
+- `published_data` records the dict your handler passed to `publish`, unchanged. Nothing is converted to the output schema types and nothing is dropped, so assert on the values your handler produced, not on what would reach the next node.
+- messages built by `testutil` carry source `"upstream-node"` and timestamp `"2026-01-01T00:00:00Z"`; assign `msg.source` / `msg.timestamp` after building to override.
+
+Without a node configuration at hand — when testing decode logic on its own — `testutil.new_message(handle, {...})` builds a message with the declared type written next to each value: `{"level": (testutil.Single(25.34), DataType.DOUBLE)}` reproduces a `double` tag the upstream node sent at single precision, and `testutil.UNDECLARED` marks a key the input schema does not declare. The value is encoded by its Python type (a bare float as double precision, `testutil.Single` as single precision), independent of the declared type, exactly as the two schemas are independent in production.
 
 Use this package only in tests. Production app entrypoints do not need to import `neoedgex.testutil`.
 
@@ -896,28 +1014,31 @@ The SDK is responsible for:
 - SDK initialization and shutdown
 - node instance lifecycle
 - message transport integration
-- periodic heartbeats and status publication
+- periodic heartbeats
+- publishing the errors your handler reports
 - process signal handling
-- handler supervision
+- handler supervision and restart
 
 As a handler author, you are responsible for:
 
 - reading messages from `ctx.messages()`
 - implementing your business logic
 - publishing output and reporting errors correctly
-- using `ctx.context()` as the root context for workers, connects, watchers, HTTP, DB, gRPC, and other long-running work started by the handler
+- passing `ctx.context()` — the stop event — into workers, HTTP, DB, gRPC, and other long-running work
 - using `ctx.logger()` when you need node-scoped logs
 - returning when `ctx.messages()` is closed
 
-Important runtime rules:
+Runtime rules:
 
-- each matched node runs `handle(ctx)` in its own execution path
+- every node in the configuration runs `handle(ctx)` in its own thread; the SDK does no filtering, and the same handler object serves all of them, so it must be safe for concurrent use
 - if your handler raises, the SDK recovers and treats it as a node failure
 - if your handler returns early while the node is still active, the SDK treats it as abnormal and restarts it
 - if shutdown is intentional and the message stream closes, your handler should return normally
 - if your handler detects a fatal initialization error, call `ctx.report_error(neoedgex.CodeInitializationError, err)`, then `ctx.stop()`, then return
-- calling `ctx.stop()` also cancels `ctx.context()`; any HTTP clients, DB connections, workers, or other long-running work that uses `ctx.context()` for cancellation propagation will be interrupted
-- the inbound message channel has a buffer of 4096; if your handler processes messages slower than they arrive and the buffer fills up, incoming messages are dropped — the SDK internally calls `report_error` but the dropped messages cannot be recovered
+- the inbound message buffer holds 4096 messages; if your handler processes messages slower than they arrive and the buffer fills up, incoming messages are dropped — the SDK internally calls `report_error` but the dropped messages cannot be recovered
+- a second, much smaller queue sits between the broker and that buffer; when a burst overflows it, the message is dropped with only a warning in the log and no reported error, so the count of reported drops is a lower bound
+- calling `ctx.stop()` also sets `ctx.context()`; any workers or long-running loops that watch that event for cancellation should wind down
+- `ctx.stop()` ends this node only: sibling nodes of the same app keep running, `run()` does not return, and the process stays up until the platform stops the container
 
 For example:
 
@@ -938,7 +1059,41 @@ class ExampleApp:
 ## Common Pitfalls
 
 - Returning from `handle` too early. The normal steady-state model is to loop over `ctx.messages()`.
-- Treating a missing key and a present-but-`None` value in `msg.data` as the same condition.
-- Depending on non-public repository paths instead of the documented SDK surface.
+- Treating a missing key and a present-but-`None` value in the `msg.to_dict()` result as the same condition.
+- Giving a `to_dataclass` field a bare annotation (`float` instead of `float | None`) when your app must distinguish an actual zero from an undefined value.
+- Checking `isinstance(value, int)` without excluding `bool` first — `bool` is an `int` subclass in Python.
+- Importing anything under `neoedgex._internal` instead of the public packages.
 - Leaving mock mode enabled in production code.
-- Assuming every input tag in `msg.data` always contains a directly usable value; in practice, some fields may be `None`, and the app needs to decide how to handle them.
+- Assuming every input tag always contains a directly usable value; in practice, some fields may be `None` (undefined), and the app needs to decide how to handle them.
+
+## Changelog
+
+This SDK follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Most recent releases first.
+
+### v2.0.0 — unreleased
+
+**BREAKING message-format and API change.** Schemas are type-only and data messages are CBOR. Matches the wire contract of Go SDK v2.1.0. Apps built with SDK 1.x cannot exchange NeoFlow messages with 2.0.0 apps and will not run unmodified; there is no dual-format transition mode — rebuild against this version and migrate.
+
+- **Message format.** A data message is a CBOR map with three top-level keys — `source`, `timestamp`, and `data`; `data` maps each field key directly to its native CBOR value with no per-field `type`/`format`/`value` wrapper. An undefined field is CBOR null. `raw` fields are sent as native CBOR byte strings — never base64. The move to CBOR covers data messages only: the error topic payload stays JSON and heartbeats stay empty.
+- **Reading messages.** The decoded `Message.data` dict attribute is **removed** — code that reads `msg.data` now raises `AttributeError`. `msg.raw` holds the `data` section still CBOR-encoded; decode it with `msg.to_dict()` (schema-driven, decoded once — every call returns a fresh, equal dict) or `msg.to_dataclass(SomeDataclass)`.
+- **What your handler receives.** Each declared input field is decoded by the `type` declared for that tag: integers arrive as `int`, `float`/`double` as `float`, `string` as `str`, `raw` as `bytes`, `bool` as `bool`. A received value of a different type is converted through the same cross-type conversion rules `publish` uses; unconvertible values are delivered as undefined (`None`). Keys not declared in the input schema pass through as the plain decoded Python value, limited to the types the SDK delivers — anything else (a list, a nested structure, an integer beyond `[-2**63, 2**64-1]`) arrives as `None`.
+- **Added** `Message.to_dataclass(...)`: decodes the data map into a dataclass — a value that arrives as the kind matching the field's annotation is decoded as declared (the declaration wins), the rest through the input schema — with `field(metadata={"key": ...})` key mapping, defaults standing in for undefined (absent or null) fields, and a `ValueError` for a present value a concrete annotation cannot take — `X | None` covers the undefined case, `Any` takes anything. It replaces what pydantic would otherwise do for message reading.
+- **Removed** the `DataFormat` concept entirely: schemas and mock payloads carry `type` only (a legacy `format` key in a config file is tolerated and ignored). The time formats `second` / `millisecond` / `datetime` are gone — a time value is carried in a `string` field and its string format is decided by the application; `base64` is replaced by the `raw` type, which is `bytes` in both directions. The type set is the 11 scalar types: `int16`, `int32`, `int64`, `uint16`, `uint32`, `uint64`, `float`, `double`, `bool`, `string`, `raw`.
+- **Removed** the top-level `datetime` convenience conversion: `publish` now rejects `datetime` values for every destination type; format times to strings in the app.
+- **Added** NaN / ±Inf rejection: publishing a NaN or infinite float fails the field conversion, and the field is published as undefined.
+- **Integer discipline.** Python `int` is unbounded; `publish` range-checks against the declared type, a value outside `[-2**63, 2**64-1]` is rejected for every numeric destination, and the SDK never emits a CBOR bignum.
+- **Added** `neoedgex.testutil.new_message(...)`, `testutil.UNDECLARED`, `testutil.Single`, and `MockNodeEnv.new_message(...)` for building messages in unit tests exactly as an upstream node sends them.
+- **Migration.** Replace every `msg.data` read with `msg.to_dict()`. Drop `format` keys from mock configs and schemas (tolerated but ignored). Declare time fields as `string` and format them in the app. Expect `bytes` (not base64 `str`) from `raw` fields.
+
+### v1.1.1 — 2026-06-05
+
+- Reverted the JSON data format that was introduced in v1.1.0 (removed the JSON payload conversion).
+
+### v1.1.0 — 2026-05-20
+
+- Added multi-handle support for input and output schemas. `ctx.publish` now takes the destination handle explicitly (`publish(handle, data)`), and handlers dispatch on `msg.handle`.
+- Added a JSON data format for arbitrary JSON payloads (reverted in v1.1.1).
+
+### v1.0.0 — 2026-05-05
+
+- Initial public release.

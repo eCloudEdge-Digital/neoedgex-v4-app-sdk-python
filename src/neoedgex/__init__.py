@@ -5,11 +5,20 @@ from neoedgex.app import (
     CodeProcessError,
     NodeEnv,
     NodeHandler,
-    PortField,
     load_mock_config,
     new,
 )
-from neoedgex.contract import ErrorCode, Logger, Message, Node
+from neoedgex.contract import (
+    DataType,
+    ErrorCode,
+    Logger,
+    Message,
+    Node,
+    PortFieldData,
+    convert_any_value,
+    convert_to_typed_value,
+    convert_value_by_type,
+)
 from neoedgex.mock import MockConfig, MockMessage, MockSection
 
 __all__ = [
@@ -17,16 +26,20 @@ __all__ = [
     "CodeInitializationError",
     "CodeNetworkError",
     "CodeProcessError",
+    "DataType",
     "ErrorCode",
     "Logger",
     "Message",
     "MockConfig",
-    "Node",
     "MockMessage",
     "MockSection",
+    "Node",
     "NodeEnv",
     "NodeHandler",
-    "PortField",
+    "PortFieldData",
+    "convert_any_value",
+    "convert_to_typed_value",
+    "convert_value_by_type",
     "load_mock_config",
     "new",
 ]

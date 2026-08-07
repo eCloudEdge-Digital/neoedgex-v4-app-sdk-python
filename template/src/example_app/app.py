@@ -53,23 +53,25 @@ class ExampleApp:
 def _prepare_request(
     ctx: neoedgex.NodeEnv, msg: neoedgex.Message
 ) -> tuple[str, bytes] | None:
+    data = msg.to_dict()
+
     if msg.handle == "input1":
         # 範例：input1 攜帶 temperature (int)
-        value = _read_typed_field(ctx, msg.handle, msg.data, "temperature", int)
+        value = _read_typed_field(ctx, msg.handle, data, "temperature", int)
         if value is None:
             return None
         return "/temperature", json.dumps({"value": value}).encode("utf-8")
 
     if msg.handle == "input2":
         # 範例：input2 攜帶 running (bool)
-        value = _read_typed_field(ctx, msg.handle, msg.data, "running", bool)
+        value = _read_typed_field(ctx, msg.handle, data, "running", bool)
         if value is None:
             return None
         return "/status", json.dumps({"running": value}).encode("utf-8")
 
     if msg.handle == "input3":
         # 範例：input3 攜帶 message (str)
-        value = _read_typed_field(ctx, msg.handle, msg.data, "message", str)
+        value = _read_typed_field(ctx, msg.handle, data, "message", str)
         if value is None:
             return None
         return "/event", json.dumps({"message": value}).encode("utf-8")

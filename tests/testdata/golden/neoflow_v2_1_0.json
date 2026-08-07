@@ -1,0 +1,993 @@
+{
+  "generated_by": "NEO-7688 fixturegen (scratch tool, not versioned; see regen)",
+  "go_sdk": "neoedgex-v4-app-sdk-go v2.1.0 (bdfcd09)",
+  "regen": "write this generator into a scratch dir with go.mod replace -\u003e local Go SDK checkout at v2.1.0, then: go mod tidy \u0026\u0026 go run . \u003e neoflow_v2_1_0.json",
+  "envelope": {
+    "source": "node-a",
+    "timestamp": "2026-03-31T09:10:11Z",
+    "data_map_hex": "a1616b01",
+    "message_hex": "a366736f75726365666e6f64652d616974696d657374616d7074323032362d30332d33315430393a31303a31315a6464617461a1616b01"
+  },
+  "decode_cases": [
+    {
+      "name": "bool_into_bool",
+      "wire_hex": "f5",
+      "declared": "bool",
+      "expect": {
+        "kind": "bool",
+        "value": "true"
+      }
+    },
+    {
+      "name": "int_into_int16",
+      "wire_hex": "393038",
+      "declared": "int16",
+      "expect": {
+        "kind": "int",
+        "value": "-12345"
+      }
+    },
+    {
+      "name": "int_into_int32",
+      "wire_hex": "393038",
+      "declared": "int32",
+      "expect": {
+        "kind": "int",
+        "value": "-12345"
+      }
+    },
+    {
+      "name": "int_into_int64_min",
+      "wire_hex": "3b7fffffffffffffff",
+      "declared": "int64",
+      "expect": {
+        "kind": "int",
+        "value": "-9223372036854775808"
+      }
+    },
+    {
+      "name": "uint_into_uint16",
+      "wire_hex": "19ffff",
+      "declared": "uint16",
+      "expect": {
+        "kind": "uint",
+        "value": "65535"
+      }
+    },
+    {
+      "name": "uint_into_uint32",
+      "wire_hex": "1affffffff",
+      "declared": "uint32",
+      "expect": {
+        "kind": "uint",
+        "value": "4294967295"
+      }
+    },
+    {
+      "name": "uint_into_uint64",
+      "wire_hex": "1bffffffffffffffff",
+      "declared": "uint64",
+      "expect": {
+        "kind": "uint",
+        "value": "18446744073709551615"
+      }
+    },
+    {
+      "name": "str_into_string",
+      "wire_hex": "6873656e736f722d31",
+      "declared": "string",
+      "expect": {
+        "kind": "string",
+        "value": "sensor-1"
+      }
+    },
+    {
+      "name": "bytes_into_raw",
+      "wire_hex": "420102",
+      "declared": "raw",
+      "expect": {
+        "kind": "bytes",
+        "value": "0102"
+      }
+    },
+    {
+      "name": "f32_into_float",
+      "wire_hex": "fa41cab852",
+      "declared": "float",
+      "expect": {
+        "kind": "float32",
+        "value": "25.34"
+      }
+    },
+    {
+      "name": "f32_into_double",
+      "wire_hex": "fa41cab852",
+      "declared": "double",
+      "expect": {
+        "kind": "float64",
+        "value": "25.34"
+      }
+    },
+    {
+      "name": "f64_into_float",
+      "wire_hex": "fb4039570a3d70a3d7",
+      "declared": "float",
+      "expect": {
+        "kind": "float32",
+        "value": "25.34"
+      }
+    },
+    {
+      "name": "f64_into_double",
+      "wire_hex": "fb4039570a3d70a3d7",
+      "declared": "double",
+      "expect": {
+        "kind": "float64",
+        "value": "25.34"
+      }
+    },
+    {
+      "name": "f64_1e300_into_float",
+      "wire_hex": "fb7e37e43c8800759c",
+      "declared": "float",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "f64_1e300_into_double",
+      "wire_hex": "fb7e37e43c8800759c",
+      "declared": "double",
+      "expect": {
+        "kind": "float64",
+        "value": "1e+300"
+      }
+    },
+    {
+      "name": "f16_into_float",
+      "wire_hex": "f94e57",
+      "declared": "float",
+      "expect": {
+        "kind": "float32",
+        "value": "25.359375"
+      }
+    },
+    {
+      "name": "f16_into_double",
+      "wire_hex": "f94e57",
+      "declared": "double",
+      "expect": {
+        "kind": "float64",
+        "value": "25.359375"
+      }
+    },
+    {
+      "name": "f16_into_int64",
+      "wire_hex": "f94e57",
+      "declared": "int64",
+      "expect": {
+        "kind": "int",
+        "value": "25"
+      }
+    },
+    {
+      "name": "f32_nan_into_float",
+      "wire_hex": "fa7fc00000",
+      "declared": "float",
+      "expect": {
+        "kind": "float32",
+        "value": "NaN"
+      }
+    },
+    {
+      "name": "f32_nan_into_double",
+      "wire_hex": "fa7fc00000",
+      "declared": "double",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "f64_nan_into_double",
+      "wire_hex": "fb7ff8000000000000",
+      "declared": "double",
+      "expect": {
+        "kind": "float64",
+        "value": "NaN"
+      }
+    },
+    {
+      "name": "f64_nan_into_float",
+      "wire_hex": "fb7ff8000000000000",
+      "declared": "float",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "f64_inf_into_double",
+      "wire_hex": "fb7ff0000000000000",
+      "declared": "double",
+      "expect": {
+        "kind": "float64",
+        "value": "+Inf"
+      }
+    },
+    {
+      "name": "f32_neginf_into_float",
+      "wire_hex": "faff800000",
+      "declared": "float",
+      "expect": {
+        "kind": "float32",
+        "value": "-Inf"
+      }
+    },
+    {
+      "name": "f16_nan_into_double",
+      "wire_hex": "f97e00",
+      "declared": "double",
+      "expect": {
+        "kind": "float64",
+        "value": "NaN"
+      }
+    },
+    {
+      "name": "f16_nan_into_float",
+      "wire_hex": "f97e00",
+      "declared": "float",
+      "expect": {
+        "kind": "float32",
+        "value": "NaN"
+      }
+    },
+    {
+      "name": "int_70000_into_int16",
+      "wire_hex": "1a00011170",
+      "declared": "int16",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "neg_into_uint16",
+      "wire_hex": "393038",
+      "declared": "uint16",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "float_trunc_into_int64",
+      "wire_hex": "fb4039e66666666666",
+      "declared": "int64",
+      "expect": {
+        "kind": "int",
+        "value": "25"
+      }
+    },
+    {
+      "name": "str_parse_into_int16",
+      "wire_hex": "623235",
+      "declared": "int16",
+      "expect": {
+        "kind": "int",
+        "value": "25"
+      }
+    },
+    {
+      "name": "str_abc_into_int16",
+      "wire_hex": "63616263",
+      "declared": "int16",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "str_parse_into_double",
+      "wire_hex": "65322e356531",
+      "declared": "double",
+      "expect": {
+        "kind": "float64",
+        "value": "25"
+      }
+    },
+    {
+      "name": "bool_into_int64",
+      "wire_hex": "f5",
+      "declared": "int64",
+      "expect": {
+        "kind": "int",
+        "value": "1"
+      }
+    },
+    {
+      "name": "int5_into_bool",
+      "wire_hex": "05",
+      "declared": "bool",
+      "expect": {
+        "kind": "bool",
+        "value": "true"
+      }
+    },
+    {
+      "name": "str_true_into_bool",
+      "wire_hex": "6474727565",
+      "declared": "bool",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "int5_into_string",
+      "wire_hex": "05",
+      "declared": "string",
+      "expect": {
+        "kind": "string",
+        "value": "5"
+      }
+    },
+    {
+      "name": "f64_into_string",
+      "wire_hex": "fb4039570a3d70a3d7",
+      "declared": "string",
+      "expect": {
+        "kind": "string",
+        "value": "2.534e+01"
+      }
+    },
+    {
+      "name": "f32_into_string",
+      "wire_hex": "fa41cab852",
+      "declared": "string",
+      "expect": {
+        "kind": "string",
+        "value": "2.534000015258789e+01"
+      }
+    },
+    {
+      "name": "bool_into_string",
+      "wire_hex": "f5",
+      "declared": "string",
+      "expect": {
+        "kind": "string",
+        "value": "true"
+      }
+    },
+    {
+      "name": "bytes_into_string",
+      "wire_hex": "420102",
+      "declared": "string",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "str_into_raw",
+      "wire_hex": "6873656e736f722d31",
+      "declared": "raw",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "null_into_double",
+      "wire_hex": "f6",
+      "declared": "double",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "cbor_undef_into_double",
+      "wire_hex": "f7",
+      "declared": "double",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "absent_into_double",
+      "absent": true,
+      "declared": "double",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "array_into_int64",
+      "wire_hex": "820102",
+      "declared": "int64",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "map_into_double",
+      "wire_hex": "a1616101",
+      "declared": "double",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "tag1_into_int64",
+      "wire_hex": "c11a514b67b0",
+      "declared": "int64",
+      "expect": {
+        "kind": "int",
+        "value": "1363896240"
+      },
+      "py_expect": {
+        "kind": "undefined"
+      },
+      "py_note": "DEV-1: cbor2 yields datetime; matrix rejects it (same rule as Go rejecting time.Time)"
+    },
+    {
+      "name": "tag1_into_double",
+      "wire_hex": "c11a514b67b0",
+      "declared": "double",
+      "expect": {
+        "kind": "float64",
+        "value": "1.36389624e+09"
+      },
+      "py_expect": {
+        "kind": "undefined"
+      },
+      "py_note": "DEV-1"
+    },
+    {
+      "name": "tag0_into_string",
+      "wire_hex": "c074323032362d30332d33315430393a31303a31315a",
+      "declared": "string",
+      "expect": {
+        "kind": "string",
+        "value": "2026-03-31T09:10:11Z"
+      },
+      "py_expect": {
+        "kind": "undefined"
+      },
+      "py_note": "DEV-1: Go codec renders tag0 back to string; cbor2 yields datetime, rejected"
+    },
+    {
+      "name": "tag2_small_into_int64",
+      "wire_hex": "c24101",
+      "declared": "int64",
+      "expect": {
+        "kind": "int",
+        "value": "1"
+      }
+    },
+    {
+      "name": "tag2_2e64_into_int64",
+      "wire_hex": "c249010000000000000000",
+      "declared": "int64",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "tag2_2e64_into_uint64",
+      "wire_hex": "c249010000000000000000",
+      "declared": "uint64",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "indef_str_into_string",
+      "wire_hex": "7f62616260ff",
+      "declared": "string",
+      "expect": {
+        "kind": "string",
+        "value": "ab"
+      }
+    },
+    {
+      "name": "nat_int_small",
+      "wire_hex": "05",
+      "declared": "",
+      "expect": {
+        "kind": "int",
+        "value": "5"
+      }
+    },
+    {
+      "name": "nat_int_neg_min",
+      "wire_hex": "3b7fffffffffffffff",
+      "declared": "",
+      "expect": {
+        "kind": "int",
+        "value": "-9223372036854775808"
+      }
+    },
+    {
+      "name": "nat_uint_max",
+      "wire_hex": "1bffffffffffffffff",
+      "declared": "",
+      "expect": {
+        "kind": "uint",
+        "value": "18446744073709551615"
+      }
+    },
+    {
+      "name": "nat_f32_widen",
+      "wire_hex": "fa41cab852",
+      "declared": "",
+      "expect": {
+        "kind": "float64",
+        "value": "25.34000015258789"
+      }
+    },
+    {
+      "name": "nat_f64",
+      "wire_hex": "fb4039570a3d70a3d7",
+      "declared": "",
+      "expect": {
+        "kind": "float64",
+        "value": "25.34"
+      }
+    },
+    {
+      "name": "nat_f16_widen",
+      "wire_hex": "f94e57",
+      "declared": "",
+      "expect": {
+        "kind": "float64",
+        "value": "25.359375"
+      }
+    },
+    {
+      "name": "nat_string",
+      "wire_hex": "6873656e736f722d31",
+      "declared": "",
+      "expect": {
+        "kind": "string",
+        "value": "sensor-1"
+      }
+    },
+    {
+      "name": "nat_bytes",
+      "wire_hex": "420102",
+      "declared": "",
+      "expect": {
+        "kind": "bytes",
+        "value": "0102"
+      }
+    },
+    {
+      "name": "nat_bool",
+      "wire_hex": "f4",
+      "declared": "",
+      "expect": {
+        "kind": "bool",
+        "value": "false"
+      }
+    },
+    {
+      "name": "nat_null",
+      "wire_hex": "f6",
+      "declared": "",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "nat_cbor_undef",
+      "wire_hex": "f7",
+      "declared": "",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "nat_array",
+      "wire_hex": "820102",
+      "declared": "",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "nat_map",
+      "wire_hex": "a1616101",
+      "declared": "",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "nat_neg_beyond_int64",
+      "wire_hex": "3b8000000000000000",
+      "declared": "",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "nat_tag2_2e64",
+      "wire_hex": "c249010000000000000000",
+      "declared": "",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "nat_tag0_time",
+      "wire_hex": "c074323032362d30332d33315430393a31303a31315a",
+      "declared": "",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "nat_tag1_epoch",
+      "wire_hex": "c11a514b67b0",
+      "declared": "",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "nat_tag42",
+      "wire_hex": "d82a01",
+      "declared": "",
+      "expect": {
+        "kind": "undefined"
+      }
+    },
+    {
+      "name": "nat_tag2_small",
+      "wire_hex": "c24101",
+      "declared": "",
+      "expect": {
+        "kind": "undefined"
+      },
+      "py_expect": {
+        "kind": "int",
+        "value": "1"
+      },
+      "py_note": "DEV-2: cbor2 absorbs tag 2 into a plain int; Go rejects big.Int"
+    },
+    {
+      "name": "nat_tag3_small",
+      "wire_hex": "c34100",
+      "declared": "",
+      "expect": {
+        "kind": "undefined"
+      },
+      "py_expect": {
+        "kind": "int",
+        "value": "-1"
+      },
+      "py_note": "DEV-2"
+    },
+    {
+      "name": "nat_indef_str",
+      "wire_hex": "7f62616260ff",
+      "declared": "",
+      "expect": {
+        "kind": "string",
+        "value": "ab"
+      }
+    },
+    {
+      "name": "nat_f16_nan",
+      "wire_hex": "f97e00",
+      "declared": "",
+      "expect": {
+        "kind": "float64",
+        "value": "NaN"
+      }
+    },
+    {
+      "name": "nat_f64_inf",
+      "wire_hex": "fb7ff0000000000000",
+      "declared": "",
+      "expect": {
+        "kind": "float64",
+        "value": "+Inf"
+      }
+    }
+  ],
+  "encode_cases": [
+    {
+      "name": "bool_true",
+      "declared": "bool",
+      "in_kind": "bool",
+      "in_value": "true",
+      "expect_hex": "f5"
+    },
+    {
+      "name": "int16_min",
+      "declared": "int16",
+      "in_kind": "int",
+      "in_value": "-32768",
+      "expect_hex": "397fff"
+    },
+    {
+      "name": "int16_max",
+      "declared": "int16",
+      "in_kind": "int",
+      "in_value": "32767",
+      "expect_hex": "197fff"
+    },
+    {
+      "name": "int16_overflow",
+      "declared": "int16",
+      "in_kind": "int",
+      "in_value": "32768",
+      "expect_error": true
+    },
+    {
+      "name": "int32_max",
+      "declared": "int32",
+      "in_kind": "int",
+      "in_value": "2147483647",
+      "expect_hex": "1a7fffffff"
+    },
+    {
+      "name": "int64_min",
+      "declared": "int64",
+      "in_kind": "int",
+      "in_value": "-9223372036854775808",
+      "expect_hex": "3b7fffffffffffffff"
+    },
+    {
+      "name": "int64_max",
+      "declared": "int64",
+      "in_kind": "int",
+      "in_value": "9223372036854775807",
+      "expect_hex": "1b7fffffffffffffff"
+    },
+    {
+      "name": "uint16_max",
+      "declared": "uint16",
+      "in_kind": "int",
+      "in_value": "65535",
+      "expect_hex": "19ffff"
+    },
+    {
+      "name": "uint32_max",
+      "declared": "uint32",
+      "in_kind": "int",
+      "in_value": "4294967295",
+      "expect_hex": "1affffffff"
+    },
+    {
+      "name": "uint64_max",
+      "declared": "uint64",
+      "in_kind": "int",
+      "in_value": "18446744073709551615",
+      "expect_hex": "1bffffffffffffffff"
+    },
+    {
+      "name": "uint_negative",
+      "declared": "uint32",
+      "in_kind": "int",
+      "in_value": "-1",
+      "expect_error": true
+    },
+    {
+      "name": "int_encodings_0",
+      "declared": "int64",
+      "in_kind": "int",
+      "in_value": "0",
+      "expect_hex": "00"
+    },
+    {
+      "name": "int_encodings_23",
+      "declared": "int64",
+      "in_kind": "int",
+      "in_value": "23",
+      "expect_hex": "17"
+    },
+    {
+      "name": "int_encodings_24",
+      "declared": "int64",
+      "in_kind": "int",
+      "in_value": "24",
+      "expect_hex": "1818"
+    },
+    {
+      "name": "int_encodings_256",
+      "declared": "int64",
+      "in_kind": "int",
+      "in_value": "256",
+      "expect_hex": "190100"
+    },
+    {
+      "name": "int_encodings_65536",
+      "declared": "int64",
+      "in_kind": "int",
+      "in_value": "65536",
+      "expect_hex": "1a00010000"
+    },
+    {
+      "name": "int_encodings_2e32",
+      "declared": "int64",
+      "in_kind": "int",
+      "in_value": "4294967296",
+      "expect_hex": "1b0000000100000000"
+    },
+    {
+      "name": "float_2534",
+      "declared": "float",
+      "in_kind": "float",
+      "in_value": "25.34",
+      "expect_hex": "fa41cab852",
+      "note": "MUST be 0xfa single-precision — the deliberate narrowing"
+    },
+    {
+      "name": "double_2534",
+      "declared": "double",
+      "in_kind": "float",
+      "in_value": "25.34",
+      "expect_hex": "fb4039570a3d70a3d7"
+    },
+    {
+      "name": "float_1e300_reject",
+      "declared": "float",
+      "in_kind": "float",
+      "in_value": "1e300",
+      "expect_error": true
+    },
+    {
+      "name": "double_1e300",
+      "declared": "double",
+      "in_kind": "float",
+      "in_value": "1e300",
+      "expect_hex": "fb7e37e43c8800759c"
+    },
+    {
+      "name": "float_nan_reject",
+      "declared": "float",
+      "in_kind": "float",
+      "in_value": "NaN",
+      "expect_error": true
+    },
+    {
+      "name": "double_nan_reject",
+      "declared": "double",
+      "in_kind": "float",
+      "in_value": "NaN",
+      "expect_error": true
+    },
+    {
+      "name": "double_inf_reject",
+      "declared": "double",
+      "in_kind": "float",
+      "in_value": "+Inf",
+      "expect_error": true
+    },
+    {
+      "name": "string_hello",
+      "declared": "string",
+      "in_kind": "string",
+      "in_value": "sensor-1",
+      "expect_hex": "6873656e736f722d31"
+    },
+    {
+      "name": "raw_bytes",
+      "declared": "raw",
+      "in_kind": "bytes",
+      "in_value": "0102",
+      "expect_hex": "420102"
+    },
+    {
+      "name": "float_trunc_into_int16",
+      "declared": "int16",
+      "in_kind": "float",
+      "in_value": "1.5",
+      "expect_hex": "01"
+    },
+    {
+      "name": "str_25_into_int16",
+      "declared": "int16",
+      "in_kind": "string",
+      "in_value": "25",
+      "expect_hex": "1819"
+    },
+    {
+      "name": "str_1p5_into_int16_reject",
+      "declared": "int16",
+      "in_kind": "string",
+      "in_value": "1.5",
+      "expect_error": true
+    },
+    {
+      "name": "str_into_double",
+      "declared": "double",
+      "in_kind": "string",
+      "in_value": "2.5e1",
+      "expect_hex": "fb4039000000000000"
+    },
+    {
+      "name": "bool_into_uint32",
+      "declared": "uint32",
+      "in_kind": "bool",
+      "in_value": "true",
+      "expect_hex": "01"
+    },
+    {
+      "name": "int_into_bool",
+      "declared": "bool",
+      "in_kind": "int",
+      "in_value": "5",
+      "expect_hex": "f5"
+    },
+    {
+      "name": "str_into_bool_reject",
+      "declared": "bool",
+      "in_kind": "string",
+      "in_value": "true",
+      "expect_error": true
+    },
+    {
+      "name": "int_into_string",
+      "declared": "string",
+      "in_kind": "int",
+      "in_value": "5",
+      "expect_hex": "6135"
+    },
+    {
+      "name": "float_into_string_sci",
+      "declared": "string",
+      "in_kind": "float",
+      "in_value": "25.34",
+      "expect_hex": "69322e353334652b3031",
+      "note": "scientific shortest form, e.g. 2.534e+01"
+    },
+    {
+      "name": "bool_into_string",
+      "declared": "string",
+      "in_kind": "bool",
+      "in_value": "true",
+      "expect_hex": "6474727565"
+    },
+    {
+      "name": "str_into_raw_reject",
+      "declared": "raw",
+      "in_kind": "string",
+      "in_value": "abc",
+      "expect_error": true
+    },
+    {
+      "name": "bytes_into_string_reject",
+      "declared": "string",
+      "in_kind": "bytes",
+      "in_value": "0102",
+      "expect_error": true
+    },
+    {
+      "name": "int_into_float",
+      "declared": "float",
+      "in_kind": "int",
+      "in_value": "25",
+      "expect_hex": "fa41c80000"
+    },
+    {
+      "name": "datetime_reject",
+      "declared": "string",
+      "in_kind": "datetime",
+      "in_value": "",
+      "expect_error": true
+    },
+    {
+      "name": "null_field",
+      "declared": "double",
+      "in_kind": "null",
+      "in_value": "",
+      "expect_hex": "f6",
+      "note": "missing/nil field publishes CBOR null"
+    },
+    {
+      "name": "int_beyond_uint64_reject",
+      "declared": "int64",
+      "in_kind": "int",
+      "in_value": "18446744073709551616",
+      "expect_error": true,
+      "py_only": true,
+      "note": "Python-only: source int outside [MinInt64, MaxUint64] has no schema type; reject, never emit CBOR bignum"
+    }
+  ]
+}

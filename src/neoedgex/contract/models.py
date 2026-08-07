@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import dataclasses
+import threading
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from types import UnionType
+from typing import Any, Protocol, Union, get_args, get_origin, get_type_hints, runtime_checkable
 
-from .types import ErrorCode, coerce_data_format, coerce_data_type
+from .codec import (
+    decode_declared,
+    decode_field_with_schema,
+    decode_natural,
+    is_undefined,
+    scan_data_map,
+    wire_matches_declared,
+)
+from .types import DataType, coerce_data_type
 from .values import PortFieldData
 
 
@@ -26,22 +37,20 @@ class Application:
 @dataclass(slots=True)
 class PortFieldSchema:
     key: str
-    type: Any
-    format: Any
+    type: DataType
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "PortFieldSchema":
+        # A legacy "format" key is tolerated and ignored.
         return cls(
             key=str(payload.get("key", "")),
             type=coerce_data_type(payload.get("type", "")),
-            format=coerce_data_format(payload.get("format", "")),
         )
 
     def to_dict(self) -> dict[str, str]:
         return {
             "key": self.key,
             "type": self.type.value,
-            "format": self.format.value,
         }
 
 
@@ -106,38 +115,194 @@ class Node:
         return {"id": self.id, "type": self.type, "data": self.data.to_dict()}
 
 
-@dataclass(slots=True)
-class NeoFlowMessage:
-    source_node_id: str
-    data: dict[str, PortFieldData]
-    timestamp: str = ""
+class Message:
+    """An incoming NeoFlow message: source, timestamp, handle and the still-
+    encoded CBOR data map (``raw``), decoded on demand by the accessors."""
 
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "NeoFlowMessage":
-        timestamp = payload.get("timestamp", "")
-        return cls(
-            source_node_id=str(payload.get("source", "")),
-            data={
-                str(key): PortFieldData.from_dict(dict(value))
-                for key, value in dict(payload.get("data", {})).items()
-            },
-            timestamp="" if timestamp is None else str(timestamp),
-        )
+    def __init__(
+        self,
+        source: str = "",
+        timestamp: str = "",
+        handle: str = "",
+        raw: bytes = b"",
+        plan: dict[str, DataType] | None = None,
+        logger: "Logger | None" = None,
+    ) -> None:
+        self.source = source
+        self.timestamp = timestamp
+        self.handle = handle
+        self.raw = raw
+        self._plan = plan
+        self._logger = logger
+        self._lock = threading.Lock()
+        self._scanned = False
+        self._spans: dict[str, bytes] | None = None
+        self._scan_exc: Exception | None = None
+        self._decoded: dict[str, Any] | None = None
+        # Keys the wire carried with a non-null value that failed to decode,
+        # mapped to the reason. Distinct from undefined (absent or null):
+        # to_dataclass raises for these on any concrete annotation.
+        self._undecodable: dict[str, str] = {}
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "source": self.source_node_id,
-            "timestamp": self.timestamp,
-            "data": {key: value.to_dict() for key, value in self.data.items()},
-        }
+        return dict(self._decode())
+
+    def _scan_locked(self) -> dict[str, bytes] | None:
+        if not self._scanned:
+            try:
+                self._spans = scan_data_map(self.raw)
+            except Exception as exc:
+                self._scan_exc = exc
+            self._scanned = True
+        return self._spans
+
+    def _decode(self) -> dict[str, Any]:
+        if self._decoded is not None:
+            return self._decoded
+        with self._lock:
+            if self._decoded is not None:
+                return self._decoded
+            fields = self._scan_locked()
+            if fields is None:
+                self._warn(
+                    "cannot decode data map (source=%r, handle=%r): %s",
+                    self.source,
+                    self.handle,
+                    self._scan_exc,
+                )
+                self._decoded = {}
+                return self._decoded
+
+            plan = self._plan or {}
+            out: dict[str, Any] = {}
+            for key, tag_type in plan.items():
+                span = fields.get(key)
+                if span is None or is_undefined(span):
+                    out[key] = None
+                    continue
+                try:
+                    out[key] = decode_field_with_schema(span, tag_type)
+                except Exception as exc:
+                    self._warn("Field %r: %s; delivering undefined", key, exc)
+                    out[key] = None
+                    self._undecodable[key] = str(exc)
+
+            for key, span in fields.items():
+                if key in plan:
+                    continue
+                if is_undefined(span):
+                    out[key] = None
+                    continue
+                try:
+                    value = decode_natural(span)
+                except Exception as exc:
+                    self._warn("Unknown tag %r: %s; delivering undefined", key, exc)
+                    out[key] = None
+                    self._undecodable[key] = str(exc)
+                    continue
+                self._debug(
+                    "Tag %r is not defined in the input schema; bypassing with natural value",
+                    key,
+                )
+                out[key] = value
+
+            self._decoded = out
+            return out
+
+    def to_dataclass(self, cls: type[Any]) -> Any:
+        if not (isinstance(cls, type) and dataclasses.is_dataclass(cls)):
+            raise TypeError(f"target must be a dataclass type, got {cls!r}")
+
+        values = self._decode()
+        with self._lock:
+            spans = self._scan_locked()
+        hints = get_type_hints(cls)
+        kwargs: dict[str, Any] = {}
+        for field_def in dataclasses.fields(cls):
+            if not field_def.init:
+                continue
+            key = field_def.metadata.get("key", field_def.name)
+            base = _annotation_base(hints.get(field_def.name))
+
+            # Declaration wins over the schema (= Go ToStruct): a wire value
+            # the annotation can take directly is decoded as declared and the
+            # schema route below only handles mismatched heads.
+            span = None if spans is None else spans.get(key)
+            if (
+                base is not None
+                and span is not None
+                and not is_undefined(span)
+                and wire_matches_declared(span[0], base)
+            ):
+                try:
+                    kwargs[field_def.name] = decode_declared(span, base)
+                except Exception as exc:
+                    raise ValueError(
+                        f"field '{field_def.name}': wire value for key '{key}' "
+                        f"cannot be decoded as declared: {exc}"
+                    ) from None
+                continue
+
+            value = values.get(key)
+            has_default = (
+                field_def.default is not dataclasses.MISSING
+                or field_def.default_factory is not dataclasses.MISSING
+            )
+            if value is None:
+                reason = self._undecodable.get(key)
+                if reason is not None:
+                    if base is not None:
+                        raise ValueError(
+                            f"field '{field_def.name}': wire value for key '{key}' "
+                            f"could not be decoded: {reason}"
+                        )
+                    kwargs[field_def.name] = None
+                    continue
+                if not has_default:
+                    kwargs[field_def.name] = None
+                continue
+
+            if base is None:
+                kwargs[field_def.name] = value
+                continue
+            if isinstance(value, base) and not (base is int and isinstance(value, bool)):
+                kwargs[field_def.name] = value
+                continue
+            raise ValueError(
+                f"field '{field_def.name}': value of type '{type(value).__name__}' "
+                f"is not compatible with annotation '{base.__name__}'"
+            )
+        return cls(**kwargs)
+
+    def _debug(self, msg: str, *args: Any) -> None:
+        if self._logger is not None:
+            self._logger.debug(msg, *args)
+
+    def _warn(self, msg: str, *args: Any) -> None:
+        if self._logger is not None:
+            self._logger.warn(msg, *args)
 
 
-@dataclass(slots=True)
-class Message:
-    handle: str
-    data: dict[str, Any]
-    source: str
-    timestamp: str = ""
+def _annotation_base(annotation: Any) -> type | None:
+    """Resolve an annotation to its concrete type. None means "accept as-is":
+    Any, object, a missing annotation, containers and multi-type unions all
+    take that path. `X | None` resolves to X — the Go pointer-field analogue:
+    None stays reserved for null/absent, a bad wire value raises like bare X."""
+    if annotation is None or annotation is Any or annotation is object:
+        return None
+    origin = get_origin(annotation)
+    if origin is Union or origin is UnionType:
+        args = get_args(annotation)
+        non_none = [arg for arg in args if arg is not type(None)]
+        if len(non_none) != 1:
+            return None
+        annotation = non_none[0]
+        if annotation is Any or annotation is object:
+            return None
+        origin = get_origin(annotation)
+    if origin is not None or not isinstance(annotation, type):
+        return None
+    return annotation
 
 
 @dataclass(slots=True)

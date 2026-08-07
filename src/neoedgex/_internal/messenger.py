@@ -163,9 +163,14 @@ class MQTTMessenger:
         if hasattr(result, "wait_for_publish"):
             completed = result.wait_for_publish(timeout=5.0)
             if completed is False:
+                self._logger.error("publish to topic %s timed out", topic)
                 raise TimeoutError(f"publish to topic {topic} timed out")
         if getattr(result, "rc", 0) not in {0, None}:
+            self._logger.error(
+                "Failed to publish message to topic %s: rc=%s", topic, result.rc
+            )
             raise RuntimeError(f"failed to publish message to topic {topic}: rc={result.rc}")
+        self._logger.debug("Published message to topic %s: %s", topic, data)
 
     def on_connect(self, _client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any = None) -> None:
         if not _is_success_reason_code(reason_code):

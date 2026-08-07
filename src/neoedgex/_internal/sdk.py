@@ -89,6 +89,11 @@ class SDK:
             return NoopLogger(tag)
         return SDKLogger(tag)
 
+    def new_handler_logger(self, tag: str) -> Logger:
+        # Handed to application code via NodeEnv.logger(); disable_sdk_log
+        # must never silence it — the app's own lines are not SDK output.
+        return SDKLogger(tag)
+
     def run(self, on_connected: Callable[[], None] | None = None) -> None:
         """Connect the messenger, invoke ``on_connected`` once the connection is
         established, then block until shutdown is requested.
@@ -191,11 +196,13 @@ class SDK:
         self._signal_handlers.clear()
 
 
-_DURATION_PATTERN = re.compile(r"^(-?\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)$")
+# "µs" is U+00B5 (micro sign), "μs" is U+03BC (Greek mu); Go accepts both.
+_DURATION_TOKEN = re.compile(r"([0-9]*)(?:\.([0-9]*))?(ns|us|µs|μs|ms|s|m|h)")
 _DURATION_UNIT_SECONDS = {
     "ns": 1e-9,
     "us": 1e-6,
     "µs": 1e-6,
+    "μs": 1e-6,
     "ms": 1e-3,
     "s": 1.0,
     "m": 60.0,
@@ -204,16 +211,31 @@ _DURATION_UNIT_SECONDS = {
 
 
 def _parse_duration_seconds(raw: str) -> float | None:
-    # Accepts a single magnitude+unit token (e.g. "1.5s", "0.5m", "250ms").
+    # Go time.ParseDuration equivalent: an optional sign followed by one or
+    # more value+unit tokens ("1m30s", "-1.5h", "500ms"); a bare "0" is valid.
     # Returns None for empty / unparseable input so callers can fall back to
     # their own defaults.
-    if not raw:
+    text = raw
+    if not text:
         return None
-    match = _DURATION_PATTERN.match(raw)
-    if match is None:
+    negative = False
+    if text[0] in "+-":
+        negative = text[0] == "-"
+        text = text[1:]
+    if text == "0":
+        return 0.0
+    if not text:
         return None
-    try:
-        value = float(match.group(1))
-    except ValueError:
-        return None
-    return value * _DURATION_UNIT_SECONDS[match.group(2)]
+    total = 0.0
+    position = 0
+    while position < len(text):
+        match = _DURATION_TOKEN.match(text, position)
+        if match is None:
+            return None
+        integer, fraction, unit = match.groups()
+        if not integer and not fraction:
+            return None
+        value = float(f"{integer or 0}.{fraction or 0}")
+        total += value * _DURATION_UNIT_SECONDS[unit]
+        position = match.end()
+    return -total if negative else total

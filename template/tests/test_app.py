@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import neoedgex
 from example_app import ExampleApp
 from example_app import app as app_module
-from neoedgex.testutil import MockNodeEnv, PublishedMessage
+from neoedgex.testutil import UNDECLARED, MockNodeEnv, PublishedMessage, new_message
+
+MOCK_CONFIG_PATH = (
+    Path(__file__).resolve().parents[1] / "cmd" / "mock_neoedgex" / "mock-config.json"
+)
+
+
+def _node_env() -> MockNodeEnv:
+    config = neoedgex.load_mock_config(MOCK_CONFIG_PATH)
+    return MockNodeEnv(config=config.nodes[0])
 
 
 def test_example_app_reports_missing_endpoint(monkeypatch) -> None:
     monkeypatch.delenv("HTTP_ENDPOINT", raising=False)
-    ctx = MockNodeEnv()
+    ctx = _node_env()
 
     ExampleApp().handle(ctx)
 
@@ -26,13 +37,12 @@ def test_example_app_routes_each_input_to_its_own_path(monkeypatch) -> None:
 
     monkeypatch.setattr(app_module, "_post", fake_post)
     monkeypatch.setenv("HTTP_ENDPOINT", "https://api.example.com")
-    ctx = MockNodeEnv(
-        message_iterable=[
-            neoedgex.Message(handle="input1", data={"temperature": 25}, source="upstream"),
-            neoedgex.Message(handle="input2", data={"running": True}, source="upstream"),
-            neoedgex.Message(handle="input3", data={"message": "hello"}, source="upstream"),
-        ]
-    )
+    ctx = _node_env()
+    ctx.message_iterable = [
+        ctx.new_message("input1", {"temperature": 25}),
+        ctx.new_message("input2", {"running": True}),
+        ctx.new_message("input3", {"message": "hello"}),
+    ]
 
     ExampleApp().handle(ctx)
 
@@ -64,11 +74,10 @@ def test_example_app_ignores_unknown_handle(monkeypatch) -> None:
 
     monkeypatch.setattr(app_module, "_post", fail_post)
     monkeypatch.setenv("HTTP_ENDPOINT", "https://api.example.com")
-    ctx = MockNodeEnv(
-        message_iterable=[
-            neoedgex.Message(handle="input4", data={"foo": "bar"}, source="upstream"),
-        ]
-    )
+    ctx = _node_env()
+    ctx.message_iterable = [
+        new_message("input4", {"foo": ("bar", UNDECLARED)}),
+    ]
 
     ExampleApp().handle(ctx)
 

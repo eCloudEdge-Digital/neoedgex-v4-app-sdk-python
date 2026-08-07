@@ -4,7 +4,7 @@ import threading
 from pathlib import Path
 from typing import Any, Iterable, Protocol, runtime_checkable
 
-from neoedgex.contract import ErrorCode, Logger, Message, Node, PortFieldData
+from neoedgex.contract import ErrorCode, Logger, Message, Node
 from neoedgex.mock import MockConfig, load_config
 
 from ._internal.node import NodeInstance
@@ -99,7 +99,6 @@ def load_mock_config(path: str | Path) -> MockConfig:
     return load_config(path)
 
 
-PortField = PortFieldData
 CodeInitializationError = ErrorCode.INITIALIZATION_ERROR
 CodeNetworkError = ErrorCode.NETWORK_ERROR
 CodeProcessError = ErrorCode.PROCESS_ERROR

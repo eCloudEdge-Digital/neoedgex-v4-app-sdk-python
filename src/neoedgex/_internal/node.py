@@ -4,45 +4,54 @@ import json
 import queue
 import threading
 import time
-from datetime import datetime, timezone
+from collections import deque
+from datetime import datetime
 from typing import Any, Callable
 
-from neoedgex.contract import ErrorCode, Event, Message, NeoFlowMessage, Node, PortFieldData
-
-_MESSAGE_CLOSED = object()
+from neoedgex.contract import DataType, ErrorCode, Event, Message, Node, convert_to_typed_value
+from neoedgex.contract.codec import (
+    decode_neoflow_envelope,
+    encode_data_map,
+    encode_field,
+    encode_neoflow_message,
+)
 
 
 class MessageStream:
+    """Mirrors a closed Go channel's semantics: after close(), consumers
+    first drain the queued messages, then every consumer — and every further
+    iteration — gets StopIteration. A put after close is silently dropped."""
+
     def __init__(self) -> None:
-        self._queue: queue.Queue[Any] = queue.Queue(maxsize=4096)
+        self._cond = threading.Condition()
+        self._items: deque[Message] = deque()
+        self._maxsize = 4096
         self._closed = False
-        self._lock = threading.Lock()
 
     def __iter__(self) -> "MessageStream":
         return self
 
     def __next__(self) -> Message:
-        item = self._queue.get()
-        if item is _MESSAGE_CLOSED:
+        with self._cond:
+            while not self._items and not self._closed:
+                self._cond.wait()
+            if self._items:
+                return self._items.popleft()
             raise StopIteration
-        return item
 
     def put_nowait(self, message: Message) -> None:
-        self._queue.put_nowait(message)
-
-    def close(self) -> None:
-        with self._lock:
+        with self._cond:
             if self._closed:
                 return
+            if len(self._items) >= self._maxsize:
+                raise queue.Full
+            self._items.append(message)
+            self._cond.notify()
+
+    def close(self) -> None:
+        with self._cond:
             self._closed = True
-        try:
-            self._queue.put_nowait(_MESSAGE_CLOSED)
-        except queue.Full:
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                pass
-            self._queue.put_nowait(_MESSAGE_CLOSED)
+            self._cond.notify_all()
 
 
 class NodeInstance:
@@ -50,8 +59,22 @@ class NodeInstance:
         if sdk is None:
             raise ValueError("sdk is nil")
         self._sdk = sdk
-        self._logger = sdk.new_logger(f"Node-{node_config.data.name}")
+        # _logger carries SDK machinery output and is silenced by
+        # disable_sdk_log; _handler_logger is what the application writes
+        # through and is never silenced. Keep the split when adding log
+        # calls: anything the SDK says about itself goes to _logger.
+        tag = f"Node-{node_config.data.name}"
+        self._logger = sdk.new_logger(tag)
+        self._handler_logger = sdk.new_handler_logger(tag)
         self._node_config = node_config
+        self._input_plans: dict[str, dict[str, DataType]] = {
+            handle: {field_def.key: field_def.type for field_def in schema}
+            for handle, schema in node_config.data.inputs.items()
+        }
+        self._output_keys: dict[str, set[str]] = {
+            handle: {field_def.key for field_def in schema}
+            for handle, schema in node_config.data.outputs.items()
+        }
         self._message_stream = MessageStream()
         self._shutdown_event = threading.Event()
         self._queue_closed_sentinel = sdk.queue_closed_sentinel()
@@ -81,7 +104,7 @@ class NodeInstance:
         return self._shutdown_event
 
     def logger(self) -> Any:
-        return self._logger
+        return self._handler_logger
 
     def publish(self, handle: str, data: dict[str, Any]) -> None:
         desired_output = self._node_config.data.outputs.get(handle)
@@ -90,41 +113,53 @@ class NodeInstance:
                 f"output handle '{handle}' does not exist for node {self._node_config.data.name}"
             )
 
-        defined_keys = {field_def.key for field_def in desired_output}
+        defined_keys = self._output_keys.get(handle, set())
         for key in data:
             if key not in defined_keys:
                 self._logger.warn("Tag %r is not defined in the output schema; dropping", key)
 
-        port_fields: dict[str, PortFieldData] = {}
+        entries: list[tuple[str, DataType, Any]] = []
         for field_def in desired_output:
             if field_def.key not in data:
-                self._logger.warn("Output field %r not provided, sending nil", field_def.key)
-                port_fields[field_def.key] = PortFieldData.empty()
+                self._logger.debug("Output field %r not provided, sending nil", field_def.key)
+                entries.append((field_def.key, field_def.type, None))
                 continue
             raw_value = data[field_def.key]
             if raw_value is None:
-                self._logger.warn("Output field %r provided with nil value, sending nil", field_def.key)
-                port_fields[field_def.key] = PortFieldData.empty()
+                self._logger.debug(
+                    "Output field %r provided with nil value, sending nil", field_def.key
+                )
+                entries.append((field_def.key, field_def.type, None))
                 continue
             try:
-                port_fields[field_def.key] = PortFieldData.new_with_any(raw_value, field_def.format)
+                typed_value = convert_to_typed_value(raw_value, field_def.type)
+                # Trial-encode inside the per-field guard: encoding can fail
+                # even after conversion succeeded (e.g. a str carrying a lone
+                # surrogate), and that must null the one field, not escape and
+                # crash the handler out of publish.
+                encode_field(typed_value, field_def.type)
             except Exception as exc:
-                port_fields[field_def.key] = PortFieldData.empty()
-                self.report_error(ErrorCode.PROCESS_ERROR, ValueError(f"field '{field_def.key}': {exc}"))
+                entries.append((field_def.key, field_def.type, None))
+                self.report_error(
+                    ErrorCode.PROCESS_ERROR,
+                    ValueError(
+                        f"field '{field_def.key}' (value type '{type(raw_value).__name__}'): {exc}"
+                    ),
+                )
+                continue
+            entries.append((field_def.key, field_def.type, typed_value))
 
-        message = NeoFlowMessage(
-            source_node_id=self._node_config.id,
-            timestamp=_now_rfc3339(),
-            data=port_fields,
+        payload = encode_neoflow_message(
+            self._node_config.id, _now_rfc3339(), encode_data_map(entries)
         )
         topic = f"neoedgex/neoflow/out/{self._node_config.id}/{handle}"
-        self._sdk.messenger().publish(topic, 2, json.dumps(message.to_dict()).encode("utf-8"))
+        self._sdk.messenger().publish(topic, 2, payload)
 
     def report_error(self, code: ErrorCode, err: BaseException | None) -> None:
         try:
             self._publish_node_event(code, err)
         except Exception as exc:
-            self._logger.warn("Failed to publish node event: %s", exc)
+            self._logger.warn("Failed to publish node error: %s", exc)
 
     def shutdown(self) -> None:
         self._shutdown_event.set()
@@ -166,7 +201,10 @@ class NodeInstance:
     def _run_handler_once(self, handler: Callable[[], None]) -> bool:
         try:
             handler()
-        except Exception as exc:
+        except BaseException as exc:
+            # BaseException mirrors Go's recover(), which catches every
+            # panic. The handler runs on a non-main thread, so
+            # KeyboardInterrupt never lands here.
             self._logger.error("Handler panicked: %s", exc)
             return True
         return not self._is_done()
@@ -224,17 +262,30 @@ class NodeInstance:
                 if payload is None or getattr(payload, "handle", None) is None:
                     continue
                 try:
-                    neoflow_message = NeoFlowMessage.from_dict(json.loads(payload.data.decode("utf-8")))
+                    source, timestamp, data_span = decode_neoflow_envelope(payload.data)
                 except Exception as exc:
                     self._logger.error("Failed to unmarshal neoflow message: %s", exc)
+                    self.report_error(ErrorCode.PROCESS_ERROR, exc)
+                    continue
+                # O(1) wire gate: the data segment must be a CBOR map (major
+                # type 5, incl. indefinite-length 0xbf); anything else is
+                # dropped whole.
+                if len(data_span) == 0 or data_span[0] & 0xE0 != 0xA0:
+                    err = ValueError(
+                        "neoflow message data segment is not a CBOR map, dropping message"
+                    )
+                    self._logger.error(str(err))
+                    self.report_error(ErrorCode.PROCESS_ERROR, err)
                     continue
                 try:
                     self._message_stream.put_nowait(
                         Message(
+                            source,
+                            timestamp,
                             handle=payload.handle,
-                            data=_decode_incoming_data(neoflow_message.data),
-                            source=neoflow_message.source_node_id,
-                            timestamp=neoflow_message.timestamp,
+                            raw=data_span,
+                            plan=self._input_plans.get(payload.handle),
+                            logger=self._logger,
                         )
                     )
                 except queue.Full:
@@ -258,32 +309,12 @@ class NodeInstance:
         return self._combined_shutdown.is_set()
 
 
-def _decode_incoming_data(data: dict[str, PortFieldData]) -> dict[str, Any]:
-    decoded: dict[str, Any] = {}
-    for key, field in data.items():
-        if field.type.value == "" or field.format.value == "":
-            decoded[key] = None
-            continue
-        try:
-            decoded[key] = field.get_any_value()
-        except Exception:
-            decoded[key] = None
-    return decoded
-
-
 def _now_rfc3339() -> str:
     # Second-precision ISO 8601 timestamp in the local timezone. Output uses a
     # numeric offset (e.g. ``+08:00``) and a ``Z`` suffix is normalized for UTC.
-    local_tz = datetime.now().astimezone().tzinfo
-    base = datetime.now(tz=local_tz).replace(microsecond=0)
+    base = datetime.now().astimezone().replace(microsecond=0)
     offset = base.strftime("%z")
-    if offset:
-        offset_str = f"{offset[:3]}:{offset[3:]}"
-    else:
-        offset_str = ""
+    offset_str = f"{offset[:3]}:{offset[3:]}"
     head = base.strftime("%Y-%m-%dT%H:%M:%S")
-    if offset_str in ("+00:00", "-00:00", ""):
-        suffix = "Z"
-    else:
-        suffix = offset_str
+    suffix = "Z" if offset_str in ("+00:00", "-00:00") else offset_str
     return f"{head}{suffix}"

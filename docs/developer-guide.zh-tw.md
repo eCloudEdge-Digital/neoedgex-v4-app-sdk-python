@@ -1,25 +1,32 @@
 # NeoEdgeX App SDK Python v4 第三方開發指南
 
+> 最新版本變更見[文末版本變更紀錄](#版本變更紀錄)。
+
 ## 這個 SDK 是什麼
 
-NeoEdgeX App SDK Python v4 是用來開發 NeoEdgeX 節點應用程式的 Python SDK，適合用來實作 driver、protocol adapter、forwarder、processor 等節點。它提供第三方開發者一套固定的執行模型：
+NeoEdgeX App SDK Python v4 是用來開發 NeoEdgeX 節點應用程式的 Python SDK，支援 driver、protocol adapter、forwarder、processor 等節點類型。SDK 提供統一的執行模型：
 
 - 透過 `ctx.messages()` 接收來自 NeoFlow 的上游訊息
 - 透過 `ctx.node_config()` 讀取節點設定
 - 透過 `ctx.publish(handle, ...)` 發布下游輸出
 - 透過 `ctx.report_error(...)` 回報執行錯誤
 
-SDK 同時負責平台相關工作，例如節點生命週期、訊息傳輸整合、心跳、狀態回報、關閉流程，以及 mock 模式。
+節點生命週期、訊息傳輸、心跳、錯誤回報、關閉流程，以及 mock 模式，由 SDK 統一處理。
+
+Python SDK 2.0.0 講的是 NeoFlow 的 CBOR 訊息格式：任何實作同一份格式的節點都能與 Python 節點逐位元組相容地交換 NeoFlow 訊息，`tests/testdata/golden/` 裡的 golden fixture 由實際運行的對端節點錄製而來，每次測試都會回放到 Python 的編解碼路徑上。
 
 ## 公開可依賴邊界
 
 第三方應用程式只應依賴以下公開套件：
 
-- `neoedgex`
-- `neoedgex.mock`
-- `neoedgex.testutil`（只建議用在單元測試）
+- `neoedgex`：app 進入點、handler 介面，以及 handler 會用到的型別
+- `neoedgex.contract`：schema 型別，即 `DataType`、`PortFieldSchema`、`NodeData`
+- `neoedgex.mock`：本地 mock 執行用的設定格式
+- `neoedgex.testutil`：`NodeEnv` 測試替身與訊息建構器，供單元測試使用；正式 app entrypoint 不需要 import
 
-本指南正式承認的公開入口如下：
+只讀值、發布值的 app 完全不需要 import `neoedgex.contract`——`DataType`、`Node`、`Message`、`Logger`、`ErrorCode` 都由 `neoedgex` 直接匯出。一旦要在 Python 程式碼裡指名 schema 型別就需要它，例如在測試裡組出節點設定，或走訪 `node_config().data.inputs`。
+
+本指南涵蓋的公開入口：
 
 - `neoedgex.new(handler)`
 - `App.run()`
@@ -29,30 +36,26 @@ SDK 同時負責平台相關工作，例如節點生命週期、訊息傳輸整�
 - `neoedgex.NodeHandler`
 - `neoedgex.NodeEnv`
 - `neoedgex.Node`
-- `neoedgex.Message`
+- `neoedgex.Message`，含 `to_dict()` 與 `to_dataclass(...)`
 - `neoedgex.Logger`
-- `neoedgex.ErrorCode`
+- `neoedgex.ErrorCode`，含 `neoedgex.CodeInitializationError` / `CodeNetworkError` / `CodeProcessError` 別名
+- `neoedgex.DataType`
+- `neoedgex.convert_to_typed_value(...)`——`publish` 使用的轉換引擎，可直接呼叫
+- `neoedgex.PortFieldData`——mock 設定與 device-facing 程式碼使用的 `{type, value}` 字串形式欄位值
+- `neoedgex.convert_any_value(...)`——把原生 Python 值轉成 `PortFieldData` 的字串形式與推得的型別
+- `neoedgex.convert_value_by_type(...)`——把 `PortFieldData` 字串依其型別解析回原生 Python 值
+- `neoedgex.contract.PortFieldSchema`、`neoedgex.contract.NodeData`
 - `neoedgex.mock.load_config(...)`
-- `neoedgex.testutil.MockNodeEnv`
+- `neoedgex.testutil.MockNodeEnv`，含 `new_message(...)`
+- `neoedgex.testutil.new_message(...)`、`testutil.UNDECLARED`、`testutil.Single`、`testutil.PublishedMessage`
 
-除了上面列出的公開 SDK surface 之外，即使 repo 裡還看得到其他路徑，也不要依賴那些內部或不穩定的實作結構；它們不屬於對外 SDK 契約。
-
-## 套件依賴規則
-
-正式 app 請只 import 這些套件：
-
-- `neoedgex`
-- `neoedgex.mock`
-
-測試程式可額外 import：
-
-- `neoedgex.testutil`
-
-即使 repo 裡看得到其他路徑，也不要 import 內部或不穩定的實作套件。
+repo 裡的其餘路徑一律不可依賴，`neoedgex._internal` 尤其如此：不屬於 SDK 契約，任何版本都可能改動。
 
 ## 最小可用範例
 
-一個 NeoEdgeX app 需要實作 `neoedgex.NodeHandler`，並透過 `neoedgex.new(...).run()` 啟動。
+實作 `neoedgex.NodeHandler`，透過 `neoedgex.new(...).run()` 啟動。
+
+> 本 handler 由 [`tests/test_guide_examples.py`](../tests/test_guide_examples.py) 原樣執行驗證。
 
 ```python
 import neoedgex
@@ -62,12 +65,7 @@ class ExampleApp:
     def handle(self, ctx: neoedgex.NodeEnv) -> None:
         for _msg in ctx.messages():
             try:
-                ctx.publish(
-                    "output1",
-                    {
-                        "hello": "world",
-                    },
-                )
+                ctx.publish("output1", {"power": 42.0})
             except Exception as err:
                 ctx.report_error(neoedgex.CodeProcessError, err)
 
@@ -76,21 +74,25 @@ if __name__ == "__main__":
     neoedgex.new(ExampleApp()).run()
 ```
 
-如果你希望停用 SDK 內部 log，可在 `run()` 前呼叫：
+handle 與 key 不能隨意命名：`publish` 依節點的 output schema 建構 payload，所以這段範例只有在節點的 `output1` 有宣告 `power` 欄位時才會真的送出東西。schema 未宣告的 key 會被丟棄——下游收不到東西時，這是第一個該檢查的地方。詳見下方 Output Schema。
+
+停用 SDK 內部 log，在 `run()` 前呼叫 `disable_sdk_log()`：
 
 ```python
 app = neoedgex.new(ExampleApp()).disable_sdk_log()
 app.run()
 ```
 
+它只會關掉 SDK 自己輸出的 log。handler 透過 `ctx.logger()` 寫出的內容照常輸出。
+
 ## 如何設定 Custom App
 
-SDK 會從固定的根路徑 `/opt/neoedgex` 讀取平台掛載進來的檔案：
+SDK 從固定根路徑 `/opt/neoedgex` 讀取平台掛載的檔案：
 
-- `messenger.json`：`/opt/neoedgex/config/messenger.json`，用來定義這個 app 透過 messenger 可以訂閱或發布哪些 NeoEdgeX topic；通常由平台自動產生，因此第三方 app 一般不需要手動修改
-- `config.json`：`/opt/neoedgex/config/config.json`，由平台下發的節點設定檔；SDK 會讀取它，並把目前 node 的設定內容透過 `ctx.node_config()` 提供給 handler
+- `/opt/neoedgex/config/messenger.json`：平台產生的 MQTT 帳號密碼；broker 依此帳號套用 topic 權限。以唯讀掛載，app 無法也不需修改。
+- `/opt/neoedgex/config/config.json`：平台下發的節點設定，SDK 透過 `ctx.node_config()` 提供給 handler
 
-Custom App node 的設定主要來自 `ctx.node_config()` 回傳的節點定義，主要包含三個區塊：
+Custom App node 的設定來自 `ctx.node_config()` 回傳的節點定義，分三個區塊：
 
 1. `config.data.inputs`
 2. `config.data.outputs`
@@ -98,75 +100,80 @@ Custom App node 的設定主要來自 `ctx.node_config()` 回傳的節點定義�
 
 ### Input Schema
 
-Custom App 的 input schema 定義在 `config.data.inputs` 底下，最常見的形狀如下：
+input schema 定義在 `config.data.inputs`：
 
 ```json
 {
   "inputs": {
     "input1": [
-      { "key": "temperature", "type": "double", "format": "double" },
-      { "key": "running", "type": "bool", "format": "bool" },
-      { "key": "capturedAt", "type": "string", "format": "datetime" }
+      { "key": "temperature", "type": "double" }
+    ],
+    "input2": [
+      { "key": "running", "type": "bool" }
+    ],
+    "input3": [
+      { "key": "capturedAt", "type": "string" }
     ]
   }
 }
 ```
 
-你可以定義多個 input handle，例如 `input1`、`input2`、`input3`。所有 input 訊息會經由同一個 `ctx.messages()` stream 進入 handler，由 handler 依 `msg.handle` 分派到對應處理流程。
+可以同時定義多個 input handle，每個 handle 各自帶獨立的欄位 schema；handler 透過 `msg.handle` 判斷訊息來自哪一個 input。
 
-Input schema 的用途，是描述 handler 預期會從 `ctx.messages()` 讀到什麼欄位。每個欄位定義了：
+input schema 描述 handler 從 `ctx.messages()` 讀到的欄位。每個欄位包含：
 
-- `key`：之後會出現在 `msg.data` 裡的欄位名稱
-- `type`：欄位的基本資料型態
-- `format`：該欄位的具體表示方式
+- `key`：handler 從解碼後的訊息讀到的欄位名稱
+- `type`：欄位的資料型態，完整決定解碼後的 Python 值
 
-當你調整 input schema 時，其實就是在改變 SDK 會如何把該 handle 的欄位解碼進 `neoedgex.Message.data`。handler 內讀取的 key 應和這裡的定義保持一致，而實際拿到的 Python 型別則取決於 SDK 的解碼結果。
+調整 input schema，就是在改變 handler 對該 handle 呼叫 `msg.to_dict()` 時，SDK 會依 schema 型別解碼哪些 key——也是在改變 `msg.to_dataclass(...)` 遇到上游送來的值與欄位標註不符時退回 schema 解碼的那些 key。handler 讀取的 key 應與這份定義保持一致，實際的 Python 型別則由 SDK 依 `type` 解碼決定。
 
 <img width="200" height="102" src="./assets/node-input-config.png" />
 
 ### Output Schema
 
-Custom App 的 output schema 定義在 `config.data.outputs` 底下，最常見的形狀如下：
+output schema 定義在 `config.data.outputs`：
 
 ```json
 {
   "outputs": {
     "output1": [
-      { "key": "power", "type": "double", "format": "double" },
-      { "key": "status", "type": "string", "format": "string" }
+      { "key": "power", "type": "double" },
+      { "key": "status", "type": "string" }
     ]
   }
 }
 ```
 
-你可以定義多個 output handle，每次呼叫 `ctx.publish(handle, {...})` 時指定要送往哪一個。指定的 handle 對應到 `outputs` 裡的 schema，會直接影響這次 publish 的驗證與轉換行為：
+可以同時定義多個 output handle，每個 handle 各自帶獨立的欄位 schema；handler 透過 `ctx.publish(handle, data)` 的第一個引數選擇要送往哪一個 output。
 
-- 你 publish 的 dict key 應該和該 handle 對應的 schema 裡定義的 key 一致
-- destination `format` 會決定可接受哪些 Python 值，以及如何轉換
-- 若 schema 中有欄位被省略，SDK 會補上空欄位，序列化後會是 `type=""`、`format=""`、`value=""`
-- 明確傳入 `None` 也會被發布成空欄位
+這份 schema 決定 `ctx.publish(handle, {...})` 的驗證與轉換行為：
 
-因此，只要你在這裡新增、刪除或改名 output 欄位，就應該同步調整 `ctx.publish(...)`。
+- publish 的 dict key 需和該 `handle` 所定義的 key 一致
+- destination `type` 決定可接受哪些 Python 值，以及如何轉換
+- schema 中被省略的欄位，SDK 送出 CBOR null（= undefined）
+- 明確傳入 `None` 的欄位，同樣送出 CBOR null
+
+新增、刪除或改名欄位後，需同步更新 `ctx.publish(...)` 的呼叫。
 
 <img width="200" height="87" src="./assets/node-output-config.png" />
 
 ### Settings
 
-Custom App 的執行設定定義在 `config.data.settings`，這些欄位會如何影響最後產生的 `docker-compose.yml`：
+執行設定定義在 `config.data.settings`，對應的 `docker-compose.yml` 欄位如下：
 
 - `containerName`：同時影響 service key 與 `container_name`
-- `image`：會出現在 service 的 `image`
-- `envVars`：會出現在 service 的 `environment`
-- `files`：會變成 `volumes` 下的額外 bind mounts
-- `devices`：會出現在 service 的 `devices`
-- `gpu.enabled=true`：會讓 service 帶上 `gpus`
-- `portBindings`：會出現在 service 的 `ports`
+- `image`：service 的 `image`
+- `envVars`：service 的 `environment`
+- `files`：`volumes` 下的額外 bind mounts
+- `devices`：service 的 `devices`
+- `gpu.enabled=true`：為 service 加上 `gpus`
+- `portBindings`：service 的 `ports`
 
-有些欄位雖然屬於 node settings，但不會直接呈現在下面這份 compose service 範例裡：
+以下欄位屬於 node settings，不直接出現在 compose service 中：
 
-- `credentials`：`neoedgex-agent` 會用這組 credential 登入 docker registry，拉取 `image` 指定的 container image
+- `credentials`：`neoedgex-agent` 用這組 credential 登入 docker registry，拉取 `image` 指定的 image
 
-最終的 `docker-compose.yml` 會是這樣：
+對應的 `docker-compose.yml` 範例：
 
 ```yaml
 name: neoedgex
@@ -209,17 +216,17 @@ services:
 
 ### 傳遞 App Config
 
-app 啟動之後，再從環境變數或掛載檔案中讀出真正的業務設定。SDK 會把這些內容帶進容器，但不會替你的 app 解析 business config schema。
+app 從環境變數或掛載檔案讀取業務設定；SDK 負責把這些內容帶進容器，但不解析 app 的 business config。
 
 #### 模式 A：用固定 key 的 env var 當 config
 
-這種模式適合：
+適合：
 
 - 小型設定
 - 單一字串或 JSON blob
 - 少量、容易直接放進 environment 的設定
 
-例如，你可以在 `settings.envVars` 定義固定 key：
+在 `settings.envVars` 定義固定 key：
 
 ```json
 "envVars": [
@@ -231,7 +238,7 @@ app 啟動之後，再從環境變數或掛載檔案中讀出真正的業務設�
 ]
 ```
 
-compose 產出後，這會變成 container 的 environment。app 啟動後，可以直接在程式裡用固定 key 讀取：
+app 讀取固定 key：
 
 ```python
 import os
@@ -241,9 +248,7 @@ if not raw:
     raise ValueError("HTTPCLIENT_CONFIG_JSON is required")
 ```
 
-這種做法的重點是：固定 env key、固定內容格式，都由 app 自己定義，SDK 不會替你決定。
-
-如果你不想把完整 JSON 塞進單一 env var，也可以把原本 JSON 裡的欄位拆成多個固定 env var：
+也可以拆成多個獨立的 env var：
 
 ```json
 "envVars": [
@@ -265,8 +270,6 @@ if not raw:
 ]
 ```
 
-app 啟動後，可以逐一讀取這些固定 key：
-
 ```python
 import os
 
@@ -275,18 +278,16 @@ method = os.getenv("HTTPCLIENT_METHOD", "")
 timeout_raw = os.getenv("HTTPCLIENT_TIMEOUT_SECONDS", "")
 ```
 
-這種做法適合欄位數量不多、每個欄位語意明確，而且你希望部署者可以直接覆寫單一設定值的情境。
-
 #### 模式 B：用固定路徑的檔案當 config
 
-這種模式適合：
+適合：
 
 - 較大的 JSON / YAML
 - 結構化設定
 - 憑證、key、secret file
 - 需要以檔案形式人工替換或掛載的內容
 
-例如，你可以在 `settings.files` 宣告一個固定讀取路徑：
+在 `settings.files` 宣告固定路徑：
 
 ```json
 "files": [
@@ -298,7 +299,7 @@ timeout_raw = os.getenv("HTTPCLIENT_TIMEOUT_SECONDS", "")
 ]
 ```
 
-compose 產出後，這會變成 bind mount。app 啟動後，可以直接在程式裡讀這個固定路徑：
+app 直接讀該路徑：
 
 ```python
 from pathlib import Path
@@ -306,27 +307,26 @@ from pathlib import Path
 payload = Path("/myconfig.json").read_text(encoding="utf-8")
 ```
 
-這種模式特別適合 app 想要自行管理完整設定檔格式，而不是把所有欄位拆成多個 env var。
-
-#### 如何選擇 env var 或 file
-
-可以用下面的原則快速決定：
+#### 選擇 env var 或 file
 
 - 小型、單值、少量 JSON：優先用 env var
 - 較大或結構化 config：優先用 file
 - 憑證、key、secret file：通常用 file
-- 如果 app 同時支援 env 與 file，建議在 app 內明確定義固定優先順序，例如 env 先、file 後
+- 同時支援 env 與 file 時，在 app 內明確定義固定優先順序，例如 env 先、file 後
 
-SDK 不會替你的 app 決定這個優先順序；這是 app 自己的 contract，也應該在你的 app 文件中明確說明。
+SDK 不決定這個優先順序；這是 app 自身的 contract，應在 app 文件中明確說明。
 
 ## 訊息模型
 
-### 執行術語
+NeoFlow 節點之間透過 MQTT 互相傳訊息：一則資料訊息就是一個 MQTT payload，內容以 CBOR（一種精簡的二進位格式）編碼。這個 payload 不需要你自己組出來或自己拆解——`msg.to_dict()` / `msg.to_dataclass(...)` 負責解碼收到的內容，`ctx.publish(...)` 負責編碼要送出的內容。本節說明的就是這兩端：handler 從 `ctx.messages()` 收到什麼，以及 `publish` 送出什麼。
 
-幾個重要執行術語：
+訊息格式一段話講完：一則資料訊息是最外層有三個 key 的 CBOR map——`source`（文字）、`timestamp`（RFC3339 文字）與 `data`。`data` 是平面 map，每個欄位 key 直接對應原生 CBOR 值，沒有 per-field type 包裝。undefined 欄位是 CBOR null（或 key 直接缺席）。`raw` 欄位是 CBOR 原生 byte string，不是 base64 文字。改用 CBOR 只涵蓋資料訊息：error topic payload 仍是 JSON，heartbeat 仍是空 payload——兩者都由 `tests/test_runtime.py` 守門。`tests/test_golden.py` 把從實際運行的對端節點錄下的 fixture 回放到 Python 的編解碼路徑上，確保這份格式不悄悄漂移。
+
+### 術語
 
 - `node`：一個被這個 app 匹配到的 NeoEdgeX 節點設定
 - `handle`：input 或 output port 名稱，例如 `input1`、`output1`
+- `tag`：input 或 output schema 裡的一個具名欄位，即 `key` / `type` 這一組，例如 `{ "key": "temperature", "type": "double" }`
 - `mock mode`：SDK 的本地模擬模式，不需要真實平台就能注入假訊息
 <img width="200" height="61"  src="./assets/node-diagram.png" />
 
@@ -336,205 +336,316 @@ SDK 不會替你的 app 決定這個優先順序；這是 app 自己的 contract
 
 `NodeEnv` 提供：
 
-- `node_config()`：讀取原始節點設定，包括 `data.settings`、`data.inputs`、`data.outputs`
+- `node_config()`：原始節點設定，含 `data.settings`、`data.inputs`、`data.outputs`
 - `messages()`：接收進來的 `neoedgex.Message`
-- `context()`：取得這個 node 的生命週期訊號，適合傳給 HTTP、DB、gRPC、worker loop 等長生命週期工作
-- `logger()`：取得 SDK 提供的 node-scoped logger
+- `context()`：這個 node 的生命週期訊號——一個 `threading.Event`，node 該停止時會被 set；把它傳給 worker、HTTP、DB、gRPC 等長生命週期工作
+- `logger()`：node-scoped logger
 - `publish(handle: str, data: dict[str, object])`：送出到指定的 output handle
 - `report_error(code, err)`：回報平台可見的 node error
-- `stop()`：通知 SDK 停止這個 node；通常用在 handler 判定無法繼續執行的 fatal error
+- `stop()`：要求 SDK 停止這個 node，用於 handler 遭遇無法繼續的 fatal error
 
-`neoedgex.Message` 內容包含：
+`neoedgex.Message` 包含：
 
-- `handle`：這次訊息是由哪個 input handle 觸發
-- `data`：`dict[str, object]`，內容是已經從 NeoFlow 欄位解碼完成的 Python 原生值
+- `handle`：觸發此訊息的 input handle 名稱
+- `raw`：原樣持有這則訊息的 `data` 段，內容仍是 CBOR 編碼；不直接讀取，而是以 `msg.to_dict()` 或 `msg.to_dataclass(...)` 解碼取值
 - `source`：來源節點 ID
-- `timestamp`：上游 publish 時間，格式為 RFC3339；若上游 payload 未提供則為空字串
+- `timestamp`：上游節點 publish 的時間，RFC3339 格式。它取自該節點自己的時鐘，因此除非機器跑在 UTC，否則會帶本地時區偏移（例如 `+08:00`）而不是 `Z`。上游 payload 未帶時間時為空字串——mock 注入的訊息一律如此
 
 ### 讀取 Input 值
 
-handler 讀到的 `msg.data` 已經是 Python 原生值。
+`msg.raw` 持有這則訊息的 `data` 段，內容仍是 CBOR 編碼。呼叫 `msg.to_dict()` 解碼成含 Python 原生值的 `dict[str, Any]`：
 
-你只需要判斷兩件事：key 有沒有存在，以及 value 是不是 `None`。
+- input schema 宣告的每個欄位，都以該 tag 所宣告的 `type` 對應的 Python 型別解碼（見下方表格）
+- 欄位為 `None` 代表 **undefined**：上游節點未輸出該欄位（CBOR null）、收到的訊息裡沒有這個 key，或收到的值無法讀取或轉換成 schema 型別
+- 收到的值型別與 schema 型別不符時，SDK 以與 publish 側相同的跨型別轉換規則轉換（整數範圍檢查、float→int 截斷、string→number parse、拒絕 NaN/Inf）；規則不允許或轉換失敗時，該欄位交付 `None`
+- 出現在收到的訊息裡、但**未**在 input schema 宣告的 key，直接交付解碼器產生的 Python 值（見下方表格），並輸出 debug log；SDK 不交付的值型別則以 `None` 交付
 
-假設收到的 input payload 是：
+`to_dict()` 只解碼一次並在內部快取：每次呼叫回傳**等值的新** dict，就地修改任何一份回傳值都不會被同一則訊息的其他讀取者看到。
+
+讀取時需先依 `msg.handle` 判斷訊息來自哪一個 input，再判斷欄位 key 是否存在，以及 value 是否為 `None`。
+
+以 input schema 宣告一個 `double` 欄位與一個 `string` 欄位為例，解碼結果如下：
+
+> 本範例由 [`tests/test_guide_examples.py`](../tests/test_guide_examples.py) 原樣執行驗證。
 
 ```python
-from datetime import datetime, UTC
+from neoedgex import DataType
+from neoedgex import testutil
 
-neoedgex.Message(
-    handle="input1",
-    source="upstream-node",
-    timestamp="2026-03-31T09:10:11Z",
-    data={
-        "temperature": 25.5,
-        "running": True,
-        "capturedAt": None,
-    },
-)
+# handler 從 ctx.messages() 會收到的一則訊息；
+# 測試裡由 testutil 建出同樣的東西。
+msg = testutil.new_message("input1", {
+    "temperature": (25.5, DataType.DOUBLE),
+    "deviceName": ("sensor-1", DataType.STRING),
+})
+# msg.handle == "input1"、msg.source == "upstream-node"
+
+data = msg.to_dict()
+# data == {"temperature": 25.5, "deviceName": "sensor-1"}
 ```
 
-handler 內建議這樣讀：
+訊息一律從 `ctx.messages()` 取得。自己建構的 `neoedgex.Message` 既沒有資料也沒有 input schema，對它呼叫 `to_dict()` 只會得到 `{}`；要在測試裡建立訊息，請用 `testutil.new_message`（見「單元測試輔助」）。
+
+讀取時對每個欄位套用相同的防禦式流程：先判斷 key 是否存在，再判斷 value 是否為 `None`，最後檢查型別。以 `temperature` 為例：
+
+> 本 handler 由 [`tests/test_guide_examples.py`](../tests/test_guide_examples.py) 原樣執行驗證。
 
 ```python
-from datetime import datetime
 import neoedgex
 
 
-class ExampleApp:
+class TemperatureApp:
     def handle(self, ctx: neoedgex.NodeEnv) -> None:
         for msg in ctx.messages():
             if msg.handle != "input1":
+                # 未在 schema 中定義的 handle，忽略即可
                 continue
 
-            temperature: float
-            if "temperature" not in msg.data:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema 沒有定義 tag temperature"))
+            data = msg.to_dict()
+            if "temperature" not in data:
+                ctx.report_error(
+                    neoedgex.CodeProcessError,
+                    RuntimeError("internal error: input1 schema does not define tag temperature"),
+                )
                 continue
-            elif msg.data["temperature"] is None:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("temperature 沒有由上游節點成功輸出"))
+            value = data["temperature"]
+            if value is None:
+                ctx.report_error(
+                    neoedgex.CodeProcessError,
+                    RuntimeError("temperature was not successfully produced by the upstream node"),
+                )
                 continue
-            elif not isinstance(msg.data["temperature"], float):
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema 未定義 tag temperature 為 float"))
+            if not isinstance(value, float):
+                ctx.report_error(
+                    neoedgex.CodeProcessError,
+                    RuntimeError("internal error: tag temperature has an unexpected type, expected float"),
+                )
                 continue
-            else:
-                temperature = msg.data["temperature"]
 
-            running: bool
-            if "running" not in msg.data:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema 沒有定義 tag running"))
-                continue
-            elif msg.data["running"] is None:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("running 沒有由上游節點成功輸出"))
-                continue
-            elif not isinstance(msg.data["running"], bool):
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema 未定義 tag running 為 bool"))
-                continue
-            else:
-                running = msg.data["running"]
-
-            captured_at: datetime
-            if "capturedAt" not in msg.data:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema 沒有定義 tag capturedAt"))
-                continue
-            elif msg.data["capturedAt"] is None:
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("capturedAt 沒有由上游節點成功輸出"))
-                continue
-            elif not isinstance(msg.data["capturedAt"], datetime):
-                ctx.report_error(neoedgex.CodeProcessError, RuntimeError("internal error: input schema 未定義 tag capturedAt 為 datetime"))
-                continue
-            else:
-                captured_at = msg.data["capturedAt"]
-
-            _ = temperature, running, captured_at
+            ctx.publish("output1", {"power": value * 2})
 ```
 
-建議把 `msg.data` 的語意固定成這樣：
+其他型別只是把 `isinstance` 的目標型別換掉，流程相同。tag 是整數型別時，記得 Python 的 `bool` 是 `int` 的子類別——app 不想把 `True` 當成 `1` 收下時，要先檢查 `isinstance(value, bool)`。
 
-- `key not in msg.data`：代表程式正在讀一個沒有定義在 input schema 裡的 tag，應視為 internal error
-- `key in msg.data and value is None`：代表前一個 node 沒有成功輸出該 tag；是否套 default、跳過、或回報 process error，取決於實作者
-- `key in msg.data and value is not None`：再做正常的 Python 型別判斷與業務處理，型別必會與 input schema 中的 tag format 一致，見下表：
+解碼後 dict 的語意：
 
-| format | handler 讀到的 Python 型別 |
+- `key not in data`：可能是 app 讀取了 input schema 未定義的 tag（屬於 internal error），也可能是整段 `data` 讀不出來——此時 `to_dict()` 回傳 `{}`，所有 key 都會不存在
+- `key in data and data[key] is None`：欄位為 undefined——前一個 node 未成功輸出該 tag、收到的訊息裡沒有這個 key，或值無法讀取或轉換成 schema 型別；由 app 決定套預設值、跳過或回報 error
+- `key in data and data[key] is not None`：可進行型別判斷，Python 型別依下方兩張表決定
+
+#### 值會以什麼 Python 型別交付
+
+**tag 已在 input schema 宣告。** 有值時，以宣告 `type` 對應的 Python 型別交付；沒有值時交付 `None`，如表格下方兩條規則所述：
+
+| type | handler 讀到的 Python 型別 |
 | --- | --- |
 | `bool` | `bool` |
 | `int16` | `int` |
 | `int32` | `int` |
 | `int64` | `int` |
-| `second` | `datetime.datetime` |
-| `millisecond` | `datetime.datetime` |
 | `uint16` | `int` |
 | `uint32` | `int` |
 | `uint64` | `int` |
 | `float` | `float` |
 | `double` | `float` |
 | `string` | `str` |
-| `datetime` | `datetime.datetime` |
-| `base64` | `bytes` |
+| `raw` | `bytes` |
 
-### 多 Input Handle 分派
+> 本節的交付規則由 [`tests/test_type_table.py`](../tests/test_type_table.py) 逐值執行驗證——實作與規則漂移時，該測試會紅。
 
-當 node 定義了多個 input handle，所有 inbound 訊息仍會經由同一個 `ctx.messages()` stream 進入 handler，並由 handler 依 `msg.handle` 分辨來源。常見寫法是依 `msg.handle` 分派到不同處理流程，並把結果送往對應的 output handle：
+Python 只有一種無上界的 `int` 與一種 `float`（64 位 double），所以宣告型別挑的不是 Python 型別，而是收訊時的**範圍檢查**與發送時的**CBOR 編碼**。宣告 `float` 不是標籤——它決定收窄、範圍檢查與還原行為。
+
+表格之外還有兩條規則：
+
+- 上游以單精度送出的小數進到 `double` tag，或以雙精度送出的小數進到 `float` tag 時，SDK 以轉換規則正規化，並還原最短小數：以單精度送出的 `25.34` 進到 `double` tag，交付為 `25.34`，不是 `25.34000015258789`
+- 值放不進宣告的型別時——例如 `1e300` 進到 `float` tag——轉換失敗，該欄位交付 `None`
+
+**tag 未在 input schema 宣告。** 值直接以解碼器產生的樣子交付，不做 schema 轉換。以這種方式交付的 Python 型別只有下列幾種：
+
+| 上游送出的內容 | handler 讀到的 Python 型別 |
+| --- | --- |
+| 小數，不分精度 | `float` |
+| -9223372036854775808 到 18446744073709551615 的整數 | `int` |
+| 文字 | `str` |
+| `true` / `false` | `bool` |
+| 二進位資料 | `bytes` |
+| 其他任何值——清單、巢狀結構，或超出上述範圍的整數 | `None`（undefined） |
+
+上游以單精度送出的值，在宣告為 `float` 或 `double` 的 key 上交付還原後的最短小數（`25.34`）；未宣告的 key 沒有宣告的精度可還原，交付的是拓寬殘影（`25.34000015258789`）——這不是資料損毀，是 32 位資訊量的事實。
+
+最後一列是一條封閉規則：上表列出的 Python 型別就是 SDK 會交付的全部，其餘一律交付 `None`，key 仍在，並輸出 warning log。清單與巢狀結構一律不交付——沒有任何 tag type 可以宣告它們，只會來自非本 SDK 的發送端，而且是整個值交付成一個 `None`，不會只交付其中一部分。實務上會遇到的是整數——即使 Python 本身裝得下更大的數，也只有落在上表範圍內的整數才會以數字交付。
+
+還有兩種 CBOR tag 情況補完外來發送端的規則，兩者都釘在 `tests/test_golden.py`：
+
+- **時間 tag（tag 0 / tag 1）。** 沒有任何可宣告型別會產生它們。宣告欄位收到時，交付成 undefined（`None`）：解碼器產出的是 `datetime`，而 `datetime` 不是資料訊息承載的型別。
+- **bignum tag（tag 2 / tag 3）。** SDK 永不發送 bignum。解碼器在任何 schema 規則之前就把 tag 吃掉，所以 bignum 包著普通 CBOR 整數裝得下的值時，在未宣告路徑交付該 `int`；宣告的數字欄位則對包著的整數套用一般的範圍規則。
+
+**任何 SDK 無法解碼、轉換或表達的值，一律交付 `None`。** key 仍留在 dict 裡、值為 `None`。所有「沒值」的情況都是同一條規則：上游未輸出值、收到的訊息裡沒有這個 key、值放不進宣告的型別、值根本讀不出來，或該值沒有 SDK 會交付的 Python 型別。
+
+只有一種情況 key 根本不在 dict 裡：整段 `data` 讀不出來的訊息，也就是 payload 損毀的樣子。此時 `to_dict()` 回傳 `{}`——連 schema 宣告的 key 都沒有——log 裡有一行 warning。
+
+### 解碼成 Dataclass
+
+`msg.to_dataclass(SomeDataclass)` 把 data 段直接解成一個 dataclass 實例。它扮演的是驗證函式庫原本會扮演的角色：讀 NeoFlow 訊息不需要 pydantic，SDK 內建的解碼器已涵蓋 schema 驅動的部分。
+
+規則如下，全部釘在 `tests/test_message.py`：
+
+- **目標。** 只接受 dataclass *型別*——傳入實例、普通 class 或 `dict` 會 raise `TypeError`。每次呼叫都建構並回傳一個**新**實例。
+- **key 對應。** data map 的 key 預設等於欄位名稱；`field(metadata={"key": "deviceName"})` 可覆寫。
+- **undefined 欄位。** key 缺席或值為 CBOR null 時，欄位宣告的 default（或 `default_factory`）生效。沒有 default 的欄位填 `None`。
+- **宣告勝過 schema。** 送來的值其 CBOR 型別與欄位標註相符時，直接照標註解碼，input schema 完全不參與。`int` 涵蓋整個 int64 值域：值域內送來的整數不管 schema 說什麼都收，超出值域則 raise。`float` 跟著送來的精度走：單精度值還原成最短十進位形式（`25.34`，不是 `25.34000015258789`），雙精度值原樣收下；送來的整數也能直接解進 `float` 標註。`str`、`bytes`、`bool` 各自直接收下對應的 CBOR 型別。
+- **值存在但是壞值。** 送來的值型別與標註不符時，改由 input schema 解碼，此時兩種情況走這條路：上游送來非 null、卻無法解碼成 schema 型別的值（`to_dict()` 交付 `None` 並輸出 warning），以及 schema 解碼成功但放不進欄位標註的值。無論哪一種，只要標註是具體型別——`float` 和 `float | None` 一視同仁——整個呼叫就 raise 帶欄位名稱的 `ValueError`。只有「原樣收下」的標註（`Any`、`object`、未標註）保持安靜：無法解碼的值讓這種欄位留 `None` 並輸出一行 log。壞值永遠不會讓 default 生效——default 只涵蓋 key 缺席或 null。欄位可能正當地沒有值時，請宣告 `X | None`：`None` 從此精確代表「null 或缺席」，也就保住「真正的零值 vs 沒值」的分辨力——真正的 `0.0` 交付 `0.0`，undefined 欄位交付 `None`，壞值則 raise。
+- **schema 值的標註處理。** 在上述 schema 路徑上，值的型別必須就是標註的型別——`int` 值不會拓寬進 `float` 標註。`int` 標註絕不接受 `bool`（Python 的 `bool` 是 `int` 子類別，但兩種 CBOR 型別毫無關係）。`Any`、`object`、未標註、容器與多型別 union 一律原樣收下 schema 解碼值——它們沒有可以獲勝的宣告。
+- **`init=False` 的欄位跳過**——它們無法透過建構子傳入，保持自身初始化產生的值。
+- **全有或全無。** 失敗的呼叫不會留下寫到一半的目標：`to_dataclass` 要嘛回傳完整的新實例，要嘛 raise。
+
+兩個讀取介面的分工清楚：`to_dict()` 信 schema，`to_dataclass` 信你的宣告。Python 的 type hint 沒有位寬——`int16` 和 `int64` 都是 `int`，`float32` 和 `float64` 都是 `float`——所以宣告挑的是型別種類，永遠不是寬度：`int` 的行為等於宣告 `int64`，`float` 則如上所述跟著送來的精度走。
+
+下面的範例可以直接執行。`testutil.new_message(...)` 建出的就是 handler 會從 `ctx.messages()` 收到的那則訊息；在自己的 app 裡，`msg` 來自該 stream，解碼錯誤也應交給 `ctx.report_error(...)` 而不是讓它往外拋。
+
+> 本範例由 [`tests/test_guide_examples.py`](../tests/test_guide_examples.py) 原樣執行驗證。
 
 ```python
-import neoedgex
+from dataclasses import dataclass, field
+from typing import Any
+
+from neoedgex import DataType
+from neoedgex import testutil
+
+# msg 是從 ctx.messages() 收到的一則訊息，這裡由 testutil 在測試中建出同樣
+# 的東西。每個值旁邊寫的是接收端節點 input schema 對該 key 宣告的型別；
+# testutil.UNDECLARED 則標記 schema 根本沒有宣告的 key。
+msg = testutil.new_message("input1", {
+    "temperature": (None, DataType.DOUBLE),   # 上游未輸出值
+    "offset": (0.0, DataType.DOUBLE),         # 上游輸出了真正的 0
+    "count": (None, DataType.INT64),          # 上游未輸出值
+    "ratio": (testutil.Single(25.34), DataType.FLOAT),
+    "level": (25.34, DataType.DOUBLE),
+    "restored": (testutil.Single(25.34), testutil.UNDECLARED),
+    "seq": (5, testutil.UNDECLARED),
+    "total": (18446744073709551615, testutil.UNDECLARED),
+    "deviceName": ("sensor-1", testutil.UNDECLARED),
+    "running": (True, testutil.UNDECLARED),
+    "payload": (b"\x01\x02", testutil.UNDECLARED),
+})
 
 
-class ExampleApp:
-    def handle(self, ctx: neoedgex.NodeEnv) -> None:
-        for msg in ctx.messages():
-            if msg.handle == "input1":
-                temperature = msg.data.get("temperature")
-                # ... 處理 input1 ...
-                ctx.publish("output1", {"api_path": "/temperature", "response_status": 200})
-            elif msg.handle == "input2":
-                running = msg.data.get("running")
-                # ... 處理 input2 ...
-                ctx.publish("output1", {"api_path": "/status", "response_status": 200})
-            elif msg.handle == "input3":
-                message = msg.data.get("message")
-                # ... 處理 input3 ...
-                ctx.publish("output1", {"api_path": "/event", "response_status": 200})
-            else:
-                # 未在 schema 中定義的 handle，忽略即可
-                continue
+@dataclass
+class Reading:
+    temperature: float | None = None  # 沒值 -> default None 生效
+    offset: float | None = None       # 真正的 0 -> 0.0
+    count: int = 0                    # 沒值 -> default 0：與真正的 0 看起來相同
+    ratio: float = 0.0                # 以單精度送來 -> 還原成 25.34
+    level: float = 0.0                # 以雙精度送來 -> 25.34
+    restored: float = 0.0             # schema 未宣告，但標註照樣獲勝 ->
+                                      # 還原成 25.34（信 schema 的 to_dict()
+                                      # 會交付拓寬值）
+    seq: int = 0                      # 未宣告 -> 5
+    total: Any = 0                    # 超過 int64 值域：`int` 標註會 raise，
+                                      # Any 收下自然值 int
+    device_name: str = field(default="", metadata={"key": "deviceName"})
+    running: bool = False             # 未宣告 -> True
+    payload: bytes = b""              # 未宣告 -> b"\x01\x02"
+
+
+reading = msg.to_dataclass(Reading)
+assert reading == Reading(
+    temperature=None,
+    offset=0.0,
+    count=0,
+    ratio=25.34,
+    level=25.34,
+    restored=25.34,
+    seq=5,
+    total=18446744073709551615,
+    device_name="sensor-1",
+    running=True,
+    payload=b"\x01\x02",
+)
 ```
 
-傳給 `ctx.publish(...)` 的 handle 必須對應到 node config `outputs` 中的某個 key；否則該呼叫會 raise。
+不相容規則的兩面：
+
+> 本範例由 [`tests/test_guide_examples.py`](../tests/test_guide_examples.py) 原樣執行驗證。
+
+```python
+from dataclasses import dataclass
+from typing import Any
+
+import pytest
+
+from neoedgex import DataType
+from neoedgex import testutil
+
+# 上游送來的是文字，dataclass 期望的是數字。
+msg = testutil.new_message("input1", {"count": ("not-a-number", DataType.STRING)})
+
+
+@dataclass
+class Strict:
+    count: int = 0
+
+
+@dataclass
+class Pointer:
+    count: int | None = None
+
+
+@dataclass
+class Loose:
+    count: Any = None
+
+
+with pytest.raises(ValueError):   # 裸 int：整個呼叫中止
+    msg.to_dataclass(Strict)
+
+with pytest.raises(ValueError):   # int | None：同樣中止
+    msg.to_dataclass(Pointer)
+
+assert msg.to_dataclass(Loose).count == "not-a-number"  # Any：原樣交付
+```
 
 ### Publish 規則
 
-`publish` 目前真實語義如下：
+`publish` 的行為：
 
-- 第一個引數是 output handle 名稱；SDK 會依該 handle 在 node config 中對應的 schema 建構 payload
-- 若該 handle 不存在於 `outputs`，呼叫會 raise
-- 若 schema 中的欄位沒有出現在你傳入的 `data` 裡，SDK 會自動補成 empty field
-- 若你明確提供某欄位但值是 `None`，SDK 也會把它補成 empty field
-- `ctx.publish(handle, {...})` 接受一般 Python 值，而 handler 讀到的 `msg.data` 也同樣是一般 Python 值
-- `data` 裡不在所選 handle schema 中的 key 一律忽略
+- 依 `handle` 引數對應的 output schema 建構 payload；`handle` 須已在 `config.data.outputs` 中定義，否則 raise `ValueError`
+- schema 中的欄位若未出現在 `data` 裡，SDK 送出 CBOR null（= undefined）
+- 明確提供但值為 `None` 的欄位，同樣送出 CBOR null
+- `data` 裡不在該 output schema 中的 key 一律丟棄（log warning），不會出現在送出的 payload 裡
+- `ctx.publish(handle, {...})` 接受一般的 Python 值；handler 從 `msg.to_dict()` 讀到的同樣是一般的 Python 值
+- 宣告為 `float` 的欄位收窄成單精度送出；絕對值超出單精度範圍的值（例如 `1e300`）該欄位送出 CBOR null，並回報 node error
+- `publish` 只有兩種情況會 raise：`handle` 不在 `config.data.outputs` 中，或 MQTT 發送失敗。欄位轉換失敗**不在其中**：該欄位以 CBOR null 送出，SDK 代為向平台回報，`publish` 正常返回。不要把「沒有例外」當成「每個欄位都照我的意思送出去了」
+
+以上規則釘在 `tests/test_runtime.py`。
 
 缺少 output 欄位時的具體例子：
 
 ```python
 # output1 schema:
-# - power: type=double, format=double
-# - status: type=string, format=string
+# - power: type=double
+# - status: type=string
 
-ctx.publish(
-    "output1",
-    {
-        "power": 42.0,
-    },
-)
+ctx.publish("output1", {"power": 42.0})
 ```
 
-這時 SDK 會用你的值建立 `power`，而 `status` 因為存在於 schema、卻沒有出現在 `data` 中，所以會自動補成 empty field。若你明確傳 `status=None`，結果也會相同。
-
-也就是說，缺少 schema 欄位時，不是直接略過，而是會被發布成明確的 empty field。
+SDK 用傳入的值建立 `power`，`status` 因未在 `data` 中出現而送出 CBOR null（下游 handler 讀到 `None`＝undefined）。明確傳 `status=None` 結果相同：
 
 ```python
 try:
-    ctx.publish(
-        "output1",
-        {
-            "power": 42.0,
-            "status": None,
-        },
-    )
+    ctx.publish("output1", {"power": 42.0, "status": None})
 except Exception as err:
     ctx.report_error(neoedgex.CodeProcessError, err)
 ```
 
-這表示你想明確把 `status` 發成 empty field。若你完全不傳 `status`，效果也一樣。
-
 ### Python 值轉換
 
-當你用 `ctx.publish(handle, {...})` 發布 output 欄位時，轉換行為會由所選 handle 對應 schema 中的 destination format 決定。
+`ctx.publish` 的轉換行為由傳入 handle 對應 schema 的 destination type 決定。轉換後的值以 destination type 的原生 CBOR 值送出。引擎是 `neoedgex.convert_to_typed_value(value, dest_type)`，也可以直接呼叫。
 
 <table>
   <thead>
     <tr>
-      <th>Destination format</th>
+      <th>Destination type</th>
       <th>Python 值類別</th>
       <th>轉換規則</th>
       <th>例子</th>
@@ -545,111 +656,87 @@ except Exception as err:
     <tr>
       <td rowspan="2"><code>bool</code></td>
       <td><code>bool</code></td>
-      <td><code>True -&gt; "true"</code>，<code>False -&gt; "false"</code></td>
-      <td><code>True -&gt; "true"</code></td>
+      <td>原樣保留。</td>
+      <td><code>True -&gt; True</code></td>
       <td rowspan="2">不接受普通 <code>str</code>。</td>
     </tr>
     <tr>
-      <td>整數、浮點</td>
-      <td>採用 zero / non-zero 規則：<code>0</code> 或 <code>0.0</code> 轉成 <code>"false"</code>；其他值都轉成 <code>"true"</code>。</td>
-      <td><code>0 -&gt; "false"</code>；<code>3.14 -&gt; "true"</code></td>
+      <td><code>int</code>、<code>float</code></td>
+      <td>採用 zero / non-zero 規則：<code>0</code> 或 <code>0.0</code> 轉成 <code>False</code>；其他值都轉成 <code>True</code>。</td>
+      <td><code>0 -&gt; False</code>；<code>3.14 -&gt; True</code></td>
     </tr>
     <tr>
       <td rowspan="4"><code>int16</code>、<code>int32</code>、<code>int64</code></td>
       <td><code>int</code></td>
-      <td>轉到目標位寬，並做 range check。</td>
-      <td><code>42 -&gt; "42"</code></td>
-      <td rowspan="4"><code>NaN</code>、<code>Inf</code>、超出範圍的值、<code>datetime.datetime</code>、<code>bytes</code> 都會失敗。</td>
+      <td>依宣告位寬做 range check。</td>
+      <td>destination <code>int64</code> + <code>42 -&gt; 42</code></td>
+      <td rowspan="4"><code>NaN</code>、<code>Inf</code>、超出範圍的值、<code>datetime</code>、<code>bytes</code> 都會失敗。</td>
     </tr>
     <tr>
       <td><code>float</code></td>
-      <td>先截斷小數部分，再做轉換與 range check。</td>
-      <td>destination <code>int64</code> + <code>12.9 -&gt; "12"</code></td>
+      <td>先截斷小數部分，再做 range check。</td>
+      <td>destination <code>int64</code> + <code>12.9 -&gt; 12</code></td>
     </tr>
     <tr>
       <td><code>bool</code></td>
-      <td><code>True</code> 轉成 <code>1</code> 或 <code>0</code>。</td>
-      <td>destination <code>int32</code> + <code>True -&gt; "1"</code></td>
+      <td><code>True</code> 轉成 <code>1</code>、<code>False</code> 轉成 <code>0</code>。</td>
+      <td>destination <code>int32</code> + <code>True -&gt; 1</code></td>
     </tr>
     <tr>
-      <td>數字字串</td>
-      <td>數字字串必須能被 parse 成目標格式。</td>
-      <td>destination <code>int16</code> + <code>"42" -&gt; "42"</code></td>
+      <td>數字 <code>str</code></td>
+      <td>以嚴格整數格式 parse（不接受底線與前後空白），再做 range check。</td>
+      <td>destination <code>int16</code> + <code>"42" -&gt; 42</code></td>
     </tr>
     <tr>
       <td rowspan="4"><code>uint16</code>、<code>uint32</code>、<code>uint64</code></td>
       <td><code>int</code></td>
-      <td>只有在結果非負且落在目標 uint 範圍內時，才可轉到目標位寬。</td>
-      <td>destination <code>uint32</code> + <code>42 -&gt; "42"</code></td>
+      <td>只有非負且落在宣告位寬內才接受。</td>
+      <td>destination <code>uint32</code> + <code>42 -&gt; 42</code></td>
       <td rowspan="4">負值、<code>NaN</code>、<code>Inf</code>、超出範圍的值都會失敗。</td>
     </tr>
     <tr>
       <td><code>float</code></td>
-      <td>先截斷小數部分，再做 uint 範圍檢查與轉換。</td>
-      <td>destination <code>uint64</code> + <code>12.9 -&gt; "12"</code></td>
+      <td>先截斷小數部分，再做 range check。</td>
+      <td>destination <code>uint64</code> + <code>12.9 -&gt; 12</code></td>
     </tr>
     <tr>
       <td><code>bool</code></td>
-      <td><code>True</code> 轉成 <code>1</code> 或 <code>0</code>。</td>
-      <td>destination <code>uint32</code> + <code>True -&gt; "1"</code></td>
+      <td><code>True</code> 轉成 <code>1</code>、<code>False</code> 轉成 <code>0</code>。</td>
+      <td>destination <code>uint32</code> + <code>True -&gt; 1</code></td>
     </tr>
     <tr>
-      <td>數字字串</td>
-      <td>數字字串必須能被 parse 成目標格式。</td>
-      <td>destination <code>uint32</code> + <code>"42" -&gt; "42"</code></td>
+      <td>數字 <code>str</code></td>
+      <td>以嚴格整數格式 parse，再做 range check。</td>
+      <td>destination <code>uint32</code> + <code>"42" -&gt; 42</code></td>
     </tr>
     <tr>
       <td rowspan="4"><code>float</code>、<code>double</code></td>
       <td><code>int</code></td>
-      <td>轉成目標浮點格式，並以 scientific notation 序列化。</td>
-      <td>destination <code>double</code> + <code>42 -&gt; "4.2e+01"</code></td>
-      <td rowspan="4">不接受 <code>datetime.datetime</code> 與 <code>bytes</code>。</td>
+      <td>轉成目標浮點精度。</td>
+      <td>destination <code>double</code> + <code>42 -&gt; 42.0</code></td>
+      <td rowspan="4">不接受 <code>NaN</code>、<code>Inf</code>、<code>datetime</code> 與 <code>bytes</code>。destination <code>float</code> 拒絕超出 float32 範圍的絕對值。</td>
     </tr>
     <tr>
       <td><code>float</code></td>
-      <td>轉成目標精度。</td>
-      <td>destination <code>float</code> + <code>25.5 -&gt; "2.55e+01"</code></td>
+      <td>轉成目標精度：destination <code>float</code> 收窄成單精度（最短小數），destination <code>double</code> 保留原值。</td>
+      <td>destination <code>float</code> + <code>25.5 -&gt; 25.5</code></td>
     </tr>
     <tr>
       <td><code>bool</code></td>
-      <td><code>True</code> 轉成 <code>1.0</code> 或 <code>0.0</code>。</td>
-      <td>destination <code>double</code> + <code>True -&gt; "1e+00"</code></td>
+      <td><code>True</code> 轉成 <code>1.0</code>、<code>False</code> 轉成 <code>0.0</code>。</td>
+      <td>destination <code>double</code> + <code>True -&gt; 1.0</code></td>
     </tr>
     <tr>
-      <td>數字字串</td>
-      <td>數字字串必須能被 parse 成目標浮點格式。</td>
-      <td>destination <code>double</code> + <code>"3.14" -&gt; "3.14e+00"</code></td>
-    </tr>
-    <tr>
-      <td rowspan="2"><code>second</code>、<code>millisecond</code></td>
-      <td>整數、浮點</td>
-      <td>浮點值會先截斷成 <code>int</code>。接著數值會依 magnitude 推斷 epoch 單位：<code>&gt;= 1e17</code> 視為 ns、<code>&gt;= 1e14</code> 視為 us、<code>&gt;= 1e11</code> 視為 ms，其他視為 s。最後再序列化成 Unix seconds 或 Unix milliseconds。</td>
-      <td>destination <code>second</code> + <code>1711094400.9</code> 會先截斷</td>
-      <td rowspan="2">destination time formats 不接受普通 <code>str</code>。</td>
-    </tr>
-    <tr>
-      <td><code>datetime.datetime</code></td>
-      <td>依 destination format 直接轉成 Unix seconds 或 Unix milliseconds。</td>
-      <td>destination <code>millisecond</code> + <code>datetime(2026, 3, 22, 10, 30, 0, tzinfo=UTC)</code> 會序列化成 Unix milliseconds</td>
-    </tr>
-    <tr>
-      <td rowspan="2"><code>datetime</code></td>
-      <td>整數、浮點</td>
-      <td>浮點值會先截斷成 <code>int</code>。接著數值會依 magnitude 推斷 epoch 單位：<code>&gt;= 1e17</code> 視為 ns、<code>&gt;= 1e14</code> 視為 us、<code>&gt;= 1e11</code> 視為 ms，其他視為 s。最後會序列化成 RFC3339。</td>
-      <td>destination <code>datetime</code> + <code>1711094400</code> 會轉成 <code>"2024-03-22T00:00:00Z"</code></td>
-      <td rowspan="2">destination <code>datetime</code> 不接受普通 <code>str</code>。</td>
-    </tr>
-    <tr>
-      <td><code>datetime.datetime</code></td>
-      <td>直接轉成 RFC3339，例如 <code>2026-03-22T10:30:00Z</code>。</td>
-      <td>destination <code>datetime</code> + <code>datetime(2026, 3, 22, 10, 30, 0, tzinfo=UTC) -&gt; "2026-03-22T10:30:00Z"</code></td>
+      <td>數字 <code>str</code></td>
+      <td>以嚴格小數格式 parse。</td>
+      <td>destination <code>double</code> + <code>"3.14" -&gt; 3.14</code></td>
     </tr>
     <tr>
       <td rowspan="4"><code>string</code></td>
       <td><code>str</code></td>
       <td>原樣保留。</td>
       <td><code>"neoedgex" -&gt; "neoedgex"</code></td>
-      <td rowspan="4"><code>datetime.datetime</code> 不會自動轉成 plain <code>string</code>；若要輸出時間文字，schema 應該用 <code>datetime</code>。</td>
+      <td rowspan="4">不接受 <code>datetime</code> 與 <code>bytes</code>。</td>
     </tr>
     <tr>
       <td><code>int</code></td>
@@ -667,130 +754,129 @@ except Exception as err:
       <td><code>True -&gt; "true"</code></td>
     </tr>
     <tr>
-      <td><code>base64</code></td>
+      <td><code>raw</code></td>
       <td><code>bytes</code></td>
-      <td>做 base64 encode。</td>
-      <td><code>b"hello" -&gt; "aGVsbG8="</code></td>
+      <td>以 CBOR 原生 byte string 送出（不做 base64）。只允許 <code>raw</code> 轉 <code>raw</code>；沒有其他型別能轉入或轉出 <code>raw</code>。<code>bytearray</code> 也接受，送出時轉為 <code>bytes</code>。</td>
+      <td><code>b"hello"</code> 逐 byte 保留。</td>
       <td>其他 Python 型別都不支援。</td>
     </tr>
   </tbody>
 </table>
 
-SDK 會依據 Python 值與 schema 指定的 destination format 決定是否可轉換；對第三方開發者來說，通常只需要關心「這個 Python 值能不能餵給這個 destination format」即可。
+表格之外的三條 Python 專屬注意事項：
+
+- **Python 的 `int` 沒有上界。** 擋住大數的是宣告型別的範圍檢查：`70000` 送進 `int16` 欄位照樣失敗，超出 `[-2**63, 2**64-1]` 的值對*所有*數字 destination 都失敗——資料訊息裝不下它，SDK 永不送出 CBOR bignum。釘在 `tests/test_golden.py` 與 `tests/test_contract.py`。
+- **`datetime` 對所有 destination type 一律拒絕。** 時間值請先在 app 內轉成字串（如 `value.isoformat()` 或 `value.strftime(...)`），並把欄位宣告為 `string`。
+- 不是單一純量的值——dict、list、set、物件——對所有 destination type 一律拒絕：SDK 回報 error，該欄位送出 CBOR null。
+
+表格中幾列的可執行版本：
+
+> 本範例由 [`tests/test_guide_examples.py`](../tests/test_guide_examples.py) 原樣執行驗證。
+
+```python
+import pytest
+
+from neoedgex import DataType, convert_to_typed_value
+
+assert convert_to_typed_value(9527, DataType.BOOL) is True
+assert convert_to_typed_value(12.9, DataType.INT64) == 12
+assert convert_to_typed_value("42", DataType.INT16) == 42
+assert convert_to_typed_value(25.5, DataType.STRING) == "2.55e+01"
+with pytest.raises(ValueError):
+    convert_to_typed_value(70000, DataType.INT16)
+with pytest.raises(ValueError):
+    convert_to_typed_value(float("nan"), DataType.DOUBLE)
+```
+
+SDK 依據 Python 值與 schema 的 destination type 決定是否可轉換。身為第三方 app 開發者，通常只需要關心傳入的 Python 值能不能被目標 schema 型別接受。
 
 假設 `output1` schema 定義了這個欄位：
 
 ```text
-- enabled: type=bool, format=bool
+- enabled: type=bool
 ```
 
-如果你這樣 publish：
+若這樣 publish：
 
 ```python
-ctx.publish(
-    "output1",
-    {
-        "enabled": 9527,
-    },
-)
+ctx.publish("output1", {"enabled": 9527})
 ```
 
-SDK 會套用 `bool` 的 zero / non-zero 規則，因此 `enabled` 最終會被轉成 `true`。
+SDK 套用 `bool` 的 zero / non-zero 規則，`enabled` 轉成 `True`。
 
-但如果你這樣 publish：
+但若改成這樣 publish：
 
 ```python
-ctx.publish(
-    "output1",
-    {
-        "enabled": "true",
-    },
-)
+ctx.publish("output1", {"enabled": "true"})
 ```
 
-`ctx.publish(...)` 不因此 raise；SDK 把 `enabled` 設為 empty field，並呼叫 `report_error` 回報平台。`ctx.publish(...)` 只有在三種情況下才 raise：所選 output handle 未定義在 node config、JSON 序列化失敗、或 MQTT 發送失敗。型別轉換失敗不會透過例外傳遞。
+`publish` 不因此 raise；SDK 把 `enabled` 以 CBOR null（undefined）送出，並代為呼叫 `report_error` 回報平台。
 
 ### Publish 流程
 
-以下是完整的 end-to-end 範例，說明 Python 值如何從 handler 流向下游節點。假設 `output1` schema 定義如下：
+以下是完整的 end-to-end 範例，說明 Python 值如何從 handler 流向下游節點。
+
+步驟 1：從 `output1` schema 開始。這個例子假設 `output1` 定義如下：
 
 ```text
-- temperature: type=double, format=double
-- running: type=bool, format=bool
-- capturedAt: type=string, format=datetime
+- temperature: type=double
+- running: type=bool
+- capturedAt: type=string
 ```
 
-handler 發布 Python 值：
+步驟 2：handler 透過 `ctx.publish(...)` 發布一般的 Python 值。`string` 欄位預期收到 Python `str`：
 
 ```python
-from datetime import datetime
 import neoedgex
 
 
 class ExampleApp:
     def handle(self, ctx: neoedgex.NodeEnv) -> None:
-        for msg in ctx.messages():
-            if msg.handle != "input1":
-                continue
-
+        for _msg in ctx.messages():
             try:
                 ctx.publish(
                     "output1",
                     {
                         "temperature": 25.5,
                         "running": True,
-                        "capturedAt": datetime.now().astimezone(),
+                        "capturedAt": "2026-03-22T10:30:00Z",
                     },
                 )
             except Exception as err:
                 ctx.report_error(neoedgex.CodeProcessError, err)
 ```
 
-SDK 在 publisher 這一側轉成以下 output payload：
+步驟 3：SDK 在 publisher 這一側把 Python 值轉成 schema 型別後，把整則訊息編碼成 CBOR。訊息最外層有三個欄位：`source`（發送的節點）、`timestamp`（發送當下的時間，RFC3339 格式，取自容器的時鐘，因此帶本地時區偏移、未必是 `Z`）與 `data`（你 publish 的欄位）。以下以 CBOR diagnostic notation（CBOR 的人類可讀表示法）呈現——每個欄位直接帶原生值，沒有 per-field type 包裝：
 
-```json
+```text
 {
   "source": "publisher-node",
+  "timestamp": "2026-03-22T18:30:00+08:00",
   "data": {
-    "temperature": {
-      "type": "double",
-      "format": "double",
-      "value": "2.55e+01"
-    },
-    "running": {
-      "type": "bool",
-      "format": "bool",
-      "value": "true"
-    },
-    "capturedAt": {
-      "type": "string",
-      "format": "datetime",
-      "value": "2026-03-22T10:30:00Z"
-    }
+    "temperature": 25.5,
+    "running": true,
+    "capturedAt": "2026-03-22T10:30:00Z"
   }
 }
 ```
 
-下游 node 在 `input1` 收到後，SDK 解碼完成，handler 看到的 `neoedgex.Message` 為：
+步驟 4：下游 node 在 `input1` 收到後，handler 以 `msg.to_dict()` 解碼，每個欄位以下游 input schema 對應的 Python 型別交付：
 
 ```python
-from datetime import datetime
+# msg.handle == "input1"、msg.source == "publisher-node"、
+# msg.timestamp == "2026-03-22T18:30:00+08:00"
 
-neoedgex.Message(
-    handle="input1",
-    source="publisher-node",
-    timestamp="2026-03-22T10:30:00Z",
-    data={
-        "temperature": 25.5,
-        "running": True,
-        "capturedAt": datetime.fromisoformat("2026-03-22T10:30:00+00:00"),
-    },
-)
+data = msg.to_dict()
+# data == {
+#     "temperature": 25.5,             # double -> float
+#     "running": True,                 # bool -> bool
+#     "capturedAt": "2026-03-22T10:30:00Z",  # string -> str
+# }
 ```
 
 ## Mock 開發流程
 
-mock mode 適合本地開發與整合測試，不需要真實 NeoEdgeX 平台也能跑 handler。
+mock mode 適合本地開發與整合測試，不需要真實 NeoEdgeX 平台。
 
 ```python
 import neoedgex
@@ -799,7 +885,7 @@ from neoedgex import mock
 
 class ExampleApp:
     def handle(self, ctx: neoedgex.NodeEnv) -> None:
-        for msg in ctx.messages():
+        for _msg in ctx.messages():
             try:
                 ctx.publish("output1", {"value": "ok"})
             except Exception as err:
@@ -815,7 +901,9 @@ if __name__ == "__main__":
     app.run()
 ```
 
-最小 mock config 形狀如下：
+最小 mock config：
+
+> 本設定檔由 [`tests/test_guide_examples.py`](../tests/test_guide_examples.py) 原樣載入驗證。
 
 ```json
 {
@@ -827,17 +915,17 @@ if __name__ == "__main__":
         "name": "demo-node",
         "inputs": {
           "input1": [
-            { "key": "temperature", "type": "double", "format": "double" }
+            { "key": "temperature", "type": "double" }
           ]
         },
         "outputs": {
           "output1": [
-            { "key": "value", "type": "string", "format": "string" }
+            { "key": "value", "type": "string" }
           ]
         },
         "application": {
           "key": "demo-app",
-          "version": "1.1.1"
+          "version": "2.0.0"
         },
         "settings": {}
       }
@@ -852,7 +940,6 @@ if __name__ == "__main__":
         "data": {
           "temperature": {
             "type": "double",
-            "format": "double",
             "value": "2.55e+01"
           }
         }
@@ -862,58 +949,94 @@ if __name__ == "__main__":
 }
 ```
 
-`neoedgex.load_mock_config(...)` 是 `neoedgex.mock.load_config(...)` 的便利入口；如果你的 mock main 已經 import `neoedgex.mock`，建議維持使用 `neoedgex.mock.load_config(...)`，讓 mock 設定來源更明確。
+這份檔案必須注意的地方：
+
+- `mock.messages[].nodeID` 必須與某個 `nodes[].id` 完全相同，`handle` 也應是同一個節點在 `inputs` 中宣告過的。節點未宣告的 `handle` 仍會送達，但背後沒有 input schema，所有值都走 bypass 路徑、不帶型別。
+- 訊息每個 tick 注入一則，從清單頭開始輪替；app 啟動後約半秒開始。要同時測多個 input，就每個 input 各列一則訊息，讓它們輪流注入。
+- `messageInterval` 是 duration 字串：一至多個「數字＋單位」組合，可帶小數，單位為 `ns`、`us`、`ms`、`s`、`m`、`h`——例如 `"3s"`、`"500ms"`、`"1.5s"`、`"1m30s"`。未填、無法解析或非正值時，一律退回 3s，且不報錯。
+- 注入的值維持字串化的 `type`/`value` 形式：浮點用科學記號（`"2.55e+01"`）、`raw` 用 base64 文字、bool 用 `"true"` / `"false"`。SDK 在注入時把每筆值轉成原生值並編成真正的 CBOR 訊息，handler 讀到的解碼結果與正式環境一致。`type` 留空的欄位會注入成 undefined，這就是測試 `None` 路徑的方法。條目或 schema 欄位上殘留的舊 `format` 鍵會被容忍並忽略（釘在 `tests/test_mock.py`）。
+- 注入的訊息一律帶 `source` `"mock"`，`timestamp` 為空字串。
+- 沒有真實 broker，因此 handler publish 的內容只看得到 log：`[MOCK PUBLISH]` 行會帶出 topic 與解碼後的 payload。heartbeat 也以同樣形式出現，payload 為空。呼叫 `disable_sdk_log()` 會把這些全部關掉。
+
+`neoedgex.load_mock_config(...)` 是 `neoedgex.mock.load_config(...)` 的便捷入口。mock main 已 import `neoedgex.mock` 時，建議直接用 `mock.load_config(...)`，讓 mock 設定的來源保持明確。
 
 正式部署時不要開啟 mock mode。
 
 ## 單元測試輔助
 
-若你要單元測試自己的 `NodeHandler`，可以使用 `neoedgex.testutil.MockNodeEnv` 建立測試用的 `NodeEnv`。它可以設定 `config`、`message_iterable`、`done_event`、`mock_logger` 與 `publish_error`，並記錄 handler 呼叫過的 `published_data`、`reported_errors` 與 `stop_called`。每筆 publish 會以 `PublishedMessage(handle, data)` 的形式記錄下來，方便測試斷言用了哪個 output handle。
+`neoedgex.testutil` 讓你不需要平台、也不需要 broker 就能執行自己的 `NodeHandler`：
+
+- `MockNodeEnv` 用來取代 SDK 傳給 `handle` 的 `NodeEnv`。把 `config` 設成要測試的節點設定，另可設定 `mock_logger`、`done_event`（set 它等於「取消」`ctx.context()`）與 `publish_error`（每次 `publish` 會 raise 的例外）。handler 結束後，從 `published_data`、`reported_errors`、`stop_called` 讀結果。`stop()` 只記錄 `stop_called`，不會 set `done_event`；測試若需要 handler 觀察到取消，請自行 set `done_event`。
+- `env.new_message(handle, data)` 依 `config` 裡的 input schema 建立進來的訊息，欄位解碼出來的型別與正式環境完全一致。`handle` 未在 `config.data.inputs` 中宣告時會 raise。schema 有宣告、`data` 沒給的 key 交付 `None`，如同上游從未輸出。
+- 指定 `env.message_iterable`（任何訊息 iterable）餵給 handler；iterable 耗盡後 `for msg in ctx.messages()` 迴圈結束，測試才能開始斷言。
+
+> 本測試由 [`tests/test_guide_examples.py`](../tests/test_guide_examples.py) 原樣執行驗證。
 
 ```python
+from neoedgex import DataType
+from neoedgex.contract import Node, NodeData, PortFieldSchema
 from neoedgex.testutil import MockNodeEnv, PublishedMessage
 
-ctx = MockNodeEnv(
-    config=node_config,
-    message_iterable=messages,
-)
 
-handler.handle(ctx)
+def test_example_app() -> None:
+    env = MockNodeEnv(
+        config=Node(
+            id="node-1",
+            data=NodeData(
+                name="demo-node",
+                inputs={"input1": [PortFieldSchema(key="temperature", type=DataType.DOUBLE)]},
+                outputs={"output1": [PortFieldSchema(key="power", type=DataType.DOUBLE)]},
+            ),
+        )
+    )
+    env.message_iterable = [env.new_message("input1", {"temperature": 25.5})]
 
-assert ctx.published_data == [PublishedMessage(handle="output1", data={"value": "ok"})]
+    ExampleApp().handle(env)
+
+    assert env.published_data == [PublishedMessage(handle="output1", data={"power": 42.0})]
 ```
+
+要記得的事：
+
+- `published_data` 原樣記錄 handler 傳給 `publish` 的那個 dict：不會依 output schema 做型別轉換，也不會丟掉任何 key。因此要斷言的是 handler 產生的值，而不是實際會送到下游的內容。
+- `testutil` 建出的訊息帶 source `"upstream-node"`、timestamp `"2026-01-01T00:00:00Z"`；建好後對 `msg.source` / `msg.timestamp` 賦值即可覆寫。
+
+手邊沒有節點設定時——例如只想單獨測解碼邏輯——可用 `testutil.new_message(handle, {...})`，把宣告型別直接寫在值旁邊：`{"level": (testutil.Single(25.34), DataType.DOUBLE)}` 重現的是上游以單精度送出的 `double` tag，`testutil.UNDECLARED` 則標記 input schema 未宣告的 key。值依其 Python 型別編碼（裸 float 編成雙精度、`testutil.Single` 編成單精度），與宣告型別無關——正式環境裡兩端 schema 本來就互相獨立。
 
 這個套件只建議用在測試；正式 app entrypoint 不需要 import `neoedgex.testutil`。
 
 ## 執行時行為
 
-SDK 會負責：
+SDK 負責：
 
 - SDK 初始化與關閉
 - node instance 生命週期
 - 訊息傳輸整合
-- 定期 heartbeats 與狀態發佈
+- 定期 heartbeats
+- 發布 handler 回報的 error
 - process signal 處理
 - handler 監控與重啟
 
-handler 作者自己要負責：
+handler 作者負責：
 
 - 從 `ctx.messages()` 讀訊息
 - 實作業務邏輯
 - 正確發布 output 與回報錯誤
-- 用 `ctx.context()` 作為 handler 啟動的 worker、connect、watcher、HTTP、DB、gRPC 等長生命週期工作的 root context
-- 需要記錄 node-scoped log 時使用 `ctx.logger()`
+- 把 `ctx.context()`（停止事件）傳進 worker、HTTP、DB、gRPC 等長生命週期工作
+- 需要 node-scoped log 時使用 `ctx.logger()`
 - 在 `ctx.messages()` 關閉後正常 return
 
-重要執行規則：
+執行規則：
 
-- 每個被匹配到的 node 都會在自己的執行路徑裡執行 `handle(ctx)`
-- 若 handler raise，SDK 會 recover 並把它視為 node failure
+- 設定裡的每個 node 都會在自己的 thread 裡執行 `handle(ctx)`；SDK 不做任何篩選，而且所有 node 共用同一個 handler 物件，因此 handler 必須是併發安全的
+- 若 handler raise，SDK 會攔下並把它視為 node failure
 - 若 handler 在 node 還活著時提早 return，SDK 會視為異常並重啟
 - 若是正常關閉，訊息 stream 關閉後 handler 應直接 return
 - 若 handler 在初始化階段發現無法繼續執行的 fatal error，應先 `ctx.report_error(neoedgex.CodeInitializationError, err)`，再 `ctx.stop()`，最後 return
-- 呼叫 `ctx.stop()` 同時取消 `ctx.context()`
-- 訊息 channel buffer 大小為 4096；buffer 滿時訊息會被 drop，SDK 同時呼叫 `report_error`，但被 drop 的訊息無法復原
+- 進站訊息 buffer 可容納 4096 則；handler 處理訊息的速度跟不上訊息進來的速度、buffer 塞滿時，後續進來的訊息會被 drop，SDK 同時呼叫 `report_error`，但被 drop 的訊息無法復原
+- broker 與這個 buffer 之間還有一個小很多的佇列；瞬間爆量把它塞滿時，訊息只會被 drop 並留下一行 warning，不會回報 error，因此被回報的 drop 數只是下限
+- 呼叫 `ctx.stop()` 同時 set `ctx.context()`；任何以這個 event 傳遞取消訊號的 worker 或長生命週期迴圈都應就此收尾
+- `ctx.stop()` 只結束這一個 node：同一個 app 的其他 node 照常執行，`run()` 不會回傳，process 也會一直存活到平台停掉容器為止
 
 例如：
 
@@ -934,7 +1057,41 @@ class ExampleApp:
 ## 常見錯誤
 
 - `handle` 太早 return。正常 steady-state 寫法通常是持續讀 `ctx.messages()`。
-- 把 `msg.data` 裡的 missing key 和 present-but-`None` 當成同一種情況。
-- 因為 repo 看得到就直接依賴未公開的內部路徑。
+- 把 `msg.to_dict()` 結果裡的 missing key 和 present-but-`None` 當成同一種情況。
+- app 需要分辨「真正的零值 vs undefined」的欄位，卻在 `to_dataclass` 目標裡用裸標註（`float` 而不是 `float | None`）。
+- 檢查 `isinstance(value, int)` 卻沒先排除 `bool`——Python 的 `bool` 是 `int` 子類別。
+- import `neoedgex._internal` 底下的東西，而不是用公開套件。
 - 正式版程式碼忘記拿掉 mock mode。
-- 以為 `msg.data` 裡的每個 input tag 都一定會有可直接使用的值；實際上某些欄位可能是 `None`，需要由 app 自己決定怎麼處理。
+- 以為每個 input tag 都一定會有可直接使用的值；實際上某些欄位可能是 `None`（undefined），需要由 app 自己決定怎麼處理。
+
+## 版本變更紀錄
+
+本 SDK 遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。最新版本列在最前面。
+
+### v2.0.0 — unreleased
+
+**BREAKING 訊息格式與 API 變更。** schema 只留 type，資料訊息改為 CBOR。與 Go SDK v2.1.0 的 wire 契約相同。以 SDK 1.x 建置的 app 無法與 2.0.0 app 交換 NeoFlow 訊息，程式碼也無法不改就跑；沒有新舊格式雙讀的過渡機制——請以本版重新建置並遷移。
+
+- **訊息格式。** 一則資料訊息是最外層有三個 key 的 CBOR map——`source`、`timestamp`、`data`；`data` 直接把每個欄位 key 對應到原生 CBOR 值，沒有 per-field `type`/`format`/`value` 包裝。undefined 欄位為 CBOR null。`raw` 欄位以 CBOR 原生 byte string 送出——不再有 base64。改用 CBOR 只涵蓋資料訊息：error topic payload 仍是 JSON，heartbeat 仍是空 payload。
+- **讀取訊息。** 解碼好的 `Message.data` dict 屬性**已移除**——讀 `msg.data` 的程式碼現在會 raise `AttributeError`。`msg.raw` 持有仍是 CBOR 編碼的 `data` 段；以 `msg.to_dict()`（schema 驅動、只解碼一次——每次呼叫回傳等值的新 dict）或 `msg.to_dataclass(SomeDataclass)` 解碼。
+- **handler 收到什麼。** 每個宣告的 input 欄位依該 tag 宣告的 `type` 解碼：整數交付 `int`、`float`/`double` 交付 `float`、`string` 交付 `str`、`raw` 交付 `bytes`、`bool` 交付 `bool`。收到的值型別不符時，以與 `publish` 側相同的跨型別轉換規則轉換；無法轉換的值交付 undefined（`None`）。未在 input schema 宣告的 key 直接交付解碼後的 Python 值，且僅限 SDK 會交付的那幾種型別——其他值（清單、巢狀結構、超出 `[-2**63, 2**64-1]` 的整數）交付 `None`。
+- **新增** `Message.to_dataclass(...)`：把 data 段解成 dataclass——送來的值型別與欄位標註相符時直接照標註解碼（宣告獲勝），其餘走 input schema——支援 `field(metadata={"key": ...})` key 對應、undefined（缺席或 null）欄位讓 default 生效、值存在但具體標註裝不下時 raise `ValueError`——`X | None` 涵蓋 undefined 情況、`Any` 什麼都收。讀訊息這件事上，它取代了原本會用 pydantic 做的部分。
+- **移除**整個 `DataFormat` 概念：schema 與 mock payload 只帶 `type`（設定檔裡殘留的舊 `format` 鍵會被容忍並忽略）。time format `second` / `millisecond` / `datetime` 已移除——時間值以 `string` 欄位傳遞，字串格式由應用自行決定；`base64` 由 `raw` 型別取代，`raw` 在兩個方向都是 `bytes`。型別只剩 11 種純量型別：`int16`、`int32`、`int64`、`uint16`、`uint32`、`uint64`、`float`、`double`、`bool`、`string`、`raw`。
+- **移除**頂層 `datetime` 便利轉換：`publish` 現在對所有 destination type 拒絕 `datetime` 值；請在 app 內先轉成字串。
+- **新增** NaN / ±Inf 拒絕：publish NaN 或無限大浮點值時該欄位轉換失敗，以 undefined 送出。
+- **整數紀律。** Python 的 `int` 沒有上界；`publish` 依宣告型別做範圍檢查，超出 `[-2**63, 2**64-1]` 的值對所有數字 destination 一律拒絕，SDK 永不送出 CBOR bignum。
+- **新增** `neoedgex.testutil.new_message(...)`、`testutil.UNDECLARED`、`testutil.Single` 與 `MockNodeEnv.new_message(...)`，在單元測試裡建構與上游節點送出形式一致的訊息。
+- **遷移。** 把所有 `msg.data` 讀取改成 `msg.to_dict()`。移除 mock config 與 schema 裡的 `format` 鍵（留著也會被忽略）。時間欄位宣告為 `string` 並在 app 內轉字串。`raw` 欄位讀到的是 `bytes`（不再是 base64 `str`）。
+
+### v1.1.1 — 2026-06-05
+
+- 還原了 v1.1.0 引入的 JSON 資料格式（移除 JSON payload 轉換）。
+
+### v1.1.0 — 2026-05-20
+
+- 新增 input 與 output schema 的多 handle 支援。`ctx.publish` 改為必須明確指定目的 handle（`publish(handle, data)`），handler 以 `msg.handle` 進行分派。
+- 新增可承載任意 JSON payload 的 JSON 資料格式（已於 v1.1.1 還原）。
+
+### v1.0.0 — 2026-05-05
+
+- 首次公開發行。

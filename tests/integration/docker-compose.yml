@@ -1,0 +1,64 @@
+name: neoedgex-itest
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: neoedgex-itest-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./configs/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks:
+      default:
+        aliases:
+          - neoedgex-messenger
+
+  go-app:
+    image: golang:1.24
+    container_name: neoedgex-itest-go-app
+    depends_on:
+      - mosquitto
+    working_dir: /app
+    command: ["sh", "-c", "go mod tidy && exec go run ."]
+    environment:
+      GOCACHE: /gocache
+      GOMODCACHE: /gomodcache
+    volumes:
+      - ./go-app:/app
+      - ${GO_SDK_PATH:-../../../neoedgex-v4-app-sdk-go}:/sdk-go:ro
+      - ./configs/go:/opt/neoedgex/config:ro
+      - go-build-cache:/gocache
+      - go-mod-cache:/gomodcache
+
+  py-app:
+    image: python:3.13-slim
+    container_name: neoedgex-itest-py-app
+    depends_on:
+      - mosquitto
+    # /sdk is mounted read-only; setuptools needs a writable tree to build, so
+    # install from a copy. The version is dynamic (setuptools-scm) and the copy
+    # has no .git, hence the pretend version.
+    command:
+      [
+        "sh",
+        "-c",
+        "cp -r /sdk /tmp/sdk && pip install --quiet --root-user-action=ignore /tmp/sdk cbor2 && exec python -u /app/main.py",
+      ]
+    environment:
+      SETUPTOOLS_SCM_PRETEND_VERSION: "2.0.0"
+    volumes:
+      - ../../src:/sdk/src:ro
+      - ../../pyproject.toml:/sdk/pyproject.toml:ro
+      - ../../README.md:/sdk/README.md:ro
+      - ./py-app:/app:ro
+      - ./configs/py:/opt/neoedgex/config:ro
+      - pip-cache:/root/.cache/pip
+
+networks:
+  default:
+    name: neoedgex-itest
+
+volumes:
+  go-build-cache:
+  go-mod-cache:
+  pip-cache:

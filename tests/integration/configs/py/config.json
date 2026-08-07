@@ -1,0 +1,48 @@
+[
+  {
+    "id": "py-node",
+    "type": "application",
+    "data": {
+      "name": "py-node",
+      "description": "Cross-language battery node (Python side)",
+      "inputs": {
+        "input1": [
+          {"key": "f_bool", "type": "bool"},
+          {"key": "f_int16", "type": "int16"},
+          {"key": "f_int32", "type": "int32"},
+          {"key": "f_int64", "type": "int64"},
+          {"key": "f_uint16", "type": "uint16"},
+          {"key": "f_uint32", "type": "uint32"},
+          {"key": "f_uint64", "type": "uint64"},
+          {"key": "f_float", "type": "double"},
+          {"key": "f_double", "type": "float"},
+          {"key": "f_string", "type": "string"},
+          {"key": "f_raw", "type": "raw"},
+          {"key": "f_missing", "type": "double"},
+          {"key": "f_overflow", "type": "int16"},
+          {"key": "f_round", "type": "int32"}
+        ]
+      },
+      "outputs": {
+        "output1": [
+          {"key": "f_bool", "type": "bool"},
+          {"key": "f_int16", "type": "int16"},
+          {"key": "f_int32", "type": "int32"},
+          {"key": "f_int64", "type": "int64"},
+          {"key": "f_uint16", "type": "uint16"},
+          {"key": "f_uint32", "type": "uint32"},
+          {"key": "f_uint64", "type": "uint64"},
+          {"key": "f_float", "type": "float"},
+          {"key": "f_double", "type": "double"},
+          {"key": "f_string", "type": "string"},
+          {"key": "f_raw", "type": "raw"},
+          {"key": "f_missing", "type": "double"},
+          {"key": "f_overflow", "type": "int16"},
+          {"key": "f_round", "type": "int32"}
+        ]
+      },
+      "application": {"key": "itest-py", "version": "0.0.0"},
+      "settings": {}
+    }
+  }
+]
