@@ -97,7 +97,7 @@ Topic compatibility is kept aligned with the Go SDK:
 - node error: `neoedgex/neoflow/error/{nodeID}`
 - heartbeat: `neoedgex/neoflow/heartbeat/{nodeID}`
 
-`ctx.publish(handle, ...)` looks up the output schema for the handle, converts each value with `convert_to_typed_value`, and encodes the CBOR envelope with a current local-offset RFC3339 timestamp. Missing keys, explicit `None`, and per-field conversion failures all encode as CBOR null; a conversion failure additionally reports a node error, but the publish itself still goes out. Only data messages are CBOR: the error topic payload stays JSON and heartbeats stay empty.
+`ctx.publish(handle, ...)` looks up the output schema for the handle, converts each value with `convert_to_typed_value`, and encodes the CBOR envelope with a current local-offset RFC3339 timestamp, rendered to millisecond precision by `_format_rfc3339` (fixed three-digit fraction, sub-millisecond truncated — byte-identical to the Go SDK's `2006-01-02T15:04:05.000Z07:00` layout for the same instant). Missing keys, explicit `None`, and per-field conversion failures all encode as CBOR null; a conversion failure additionally reports a node error, but the publish itself still goes out. Only data messages are CBOR: the error topic payload stays JSON and heartbeats stay empty.
 
 Inbound payloads have their envelope decoded eagerly (`source`, `timestamp`); the `data` section is kept as raw bytes on the `Message` and decoded when the handler asks (see the previous section).
 

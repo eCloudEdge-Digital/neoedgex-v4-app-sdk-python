@@ -349,7 +349,7 @@ Each handler receives a `neoedgex.NodeEnv`.
 - `handle`: which input handle triggered this message
 - `raw`: the `data` section of the received message exactly as it arrived, still CBOR-encoded; you do not read it directly — decode it with `msg.to_dict()` or `msg.to_dataclass(...)`
 - `source`: source node ID
-- `timestamp`: the time the upstream node published, in RFC3339 format. It is written from that node's own clock, so expect a local offset such as `+08:00` rather than `Z` unless the machine runs on UTC. It is an empty string when the upstream payload carries no time, which is the case for every mock-injected message
+- `timestamp`: the time the upstream node published, in RFC3339 format with millisecond precision (`2026-03-22T18:30:00.123+08:00`). It is written from that node's own clock, so expect a local offset such as `+08:00` rather than `Z` unless the machine runs on UTC. It is an empty string when the upstream payload carries no time, which is the case for every mock-injected message. The SDK passes the string through untouched, so a node publishing from an older SDK still arrives with a second-precision stamp and no fraction — `datetime.fromisoformat` reads both
 
 ### Reading Input Values
 
@@ -848,12 +848,12 @@ class ExampleApp:
                 ctx.report_error(neoedgex.CodeProcessError, err)
 ```
 
-Step 3: on the publisher side, the SDK converts those Python values to the schema types and encodes the whole message as CBOR. The message has three top-level fields: `source` (the publishing node), `timestamp` (the moment of publication, in RFC3339, taken from the container's clock — so it carries the local UTC offset, not necessarily `Z`), and `data` (your published fields). Shown here in CBOR diagnostic notation, the human-readable rendering of CBOR — each field carries its native value, with no per-field type wrapper:
+Step 3: on the publisher side, the SDK converts those Python values to the schema types and encodes the whole message as CBOR. The message has three top-level fields: `source` (the publishing node), `timestamp` (the moment of publication, in RFC3339 with millisecond precision, taken from the container's clock — so it carries the local UTC offset, not necessarily `Z`), and `data` (your published fields). Shown here in CBOR diagnostic notation, the human-readable rendering of CBOR — each field carries its native value, with no per-field type wrapper:
 
 ```text
 {
   "source": "publisher-node",
-  "timestamp": "2026-03-22T18:30:00+08:00",
+  "timestamp": "2026-03-22T18:30:00.123+08:00",
   "data": {
     "temperature": 25.5,
     "running": true,
@@ -866,7 +866,7 @@ Step 4: when a downstream node receives that payload on its own `input1`, the ha
 
 ```python
 # msg.handle == "input1", msg.source == "publisher-node",
-# msg.timestamp == "2026-03-22T18:30:00+08:00"
+# msg.timestamp == "2026-03-22T18:30:00.123+08:00"
 
 data = msg.to_dict()
 # data == {
@@ -1070,7 +1070,11 @@ class ExampleApp:
 
 This SDK follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Most recent releases first.
 
-### v2.0.0 — unreleased
+### v2.1.0 — 2026-08-13
+
+- **Millisecond message timestamps.** The envelope `timestamp` is RFC3339 with a fixed three-digit fraction (`2026-03-22T10:30:00.123Z`) instead of whole seconds, so samples taken within the same second are no longer written as the same time. Sub-millisecond digits are truncated rather than rounded, and the rendering is byte-identical to the Go SDK's for the same instant. The field remains a CBOR text string and `datetime.fromisoformat` reads both forms, so a node still publishing second-precision stamps interoperates in both directions. Consumers that validate the stamp against a fixed-length pattern, or parse it with `strptime` without `%f`, must be updated.
+
+### v2.0.0 — 2026-08-10
 
 **BREAKING message-format and API change.** Schemas are type-only and data messages are CBOR. Matches the wire contract of Go SDK v2.1.0. Apps built with SDK 1.x cannot exchange NeoFlow messages with 2.0.0 apps and will not run unmodified; there is no dual-format transition mode — rebuild against this version and migrate.
 

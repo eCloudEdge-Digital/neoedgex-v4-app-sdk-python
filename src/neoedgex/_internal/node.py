@@ -309,12 +309,26 @@ class NodeInstance:
         return self._combined_shutdown.is_set()
 
 
-def _now_rfc3339() -> str:
-    # Second-precision ISO 8601 timestamp in the local timezone. Output uses a
-    # numeric offset (e.g. ``+08:00``) and a ``Z`` suffix is normalized for UTC.
-    base = datetime.now().astimezone().replace(microsecond=0)
+def _format_rfc3339(base: datetime) -> str:
+    # Millisecond-precision ISO 8601 rendering of an aware datetime. Output uses
+    # a numeric offset (e.g. ``+08:00``) and a ``Z`` suffix is normalized for
+    # UTC.
+    #
+    # Tags are polled on millisecond intervals, so a second-precision stamp
+    # collapses every sample taken within the same second into one
+    # indistinguishable time. The fraction is fixed at three digits rather than
+    # ``datetime.isoformat``'s variable one, which drops the fraction entirely
+    # on a whole second and would hand consumers a variable-length string.
+    # Sub-millisecond digits are truncated, never rounded, which is what the Go
+    # SDK's "2006-01-02T15:04:05.000Z07:00" layout does — the two SDKs must
+    # render the same instant identically.
     offset = base.strftime("%z")
     offset_str = f"{offset[:3]}:{offset[3:]}"
     head = base.strftime("%Y-%m-%dT%H:%M:%S")
+    milliseconds = base.microsecond // 1000
     suffix = "Z" if offset_str in ("+00:00", "-00:00") else offset_str
-    return f"{head}{suffix}"
+    return f"{head}.{milliseconds:03d}{suffix}"
+
+
+def _now_rfc3339() -> str:
+    return _format_rfc3339(datetime.now().astimezone())

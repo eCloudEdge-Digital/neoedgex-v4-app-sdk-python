@@ -12,20 +12,31 @@ import re
 import signal
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
+import cbor2
 import pytest
 
 import neoedgex
 from neoedgex import App
 from neoedgex._internal.logger import NoopLogger, SDKLogger
-from neoedgex._internal.node import MessageStream, NodeInstance
+from neoedgex._internal.node import MessageStream, NodeInstance, _format_rfc3339
 from neoedgex._internal.sdk import SDK
 from neoedgex.contract import DataType, Message, PortFieldSchema, RawMessengerPayload
-from neoedgex.contract.codec import encode_data_map, encode_neoflow_message
+from neoedgex.contract.codec import (
+    decode_neoflow_envelope,
+    encode_data_map,
+    encode_neoflow_message,
+    scan_data_map,
+)
 from support import FakeMessenger, FakeSDK, RecordingLogger, data_spans, envelope_of, make_node
 
-_RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$")
+# RFC3339 with exactly three fractional digits: the shape a fixed-width
+# fraction guarantees even when the clock lands on a whole second.
+_RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}(Z|[+-]\d{2}:\d{2})$")
+
+# The whole-second prefix two stamps share when only their fraction differs.
+_SECOND_PRECISION_WIDTH = len("2006-01-02T15:04:05")
 
 
 def _instance(logger: RecordingLogger | None = None) -> tuple[NodeInstance, FakeMessenger]:
@@ -75,6 +86,109 @@ def test_publish_topic_qos_and_envelope() -> None:
     assert _RFC3339.match(timestamp), timestamp
     # An RFC3339 timestamp Python itself can read back, timezone included.
     assert datetime.fromisoformat(timestamp).tzinfo is not None
+
+
+# The renderer is asserted directly, because the clock-driven tests below cannot
+# choose which instant they observe: the whole-second case is where a variable
+# fraction (``datetime.isoformat``) would silently drop it, and the expected
+# strings are exactly what Go's "2006-01-02T15:04:05.000Z07:00" layout produces
+# for the same instants, so the two SDKs cannot drift apart.
+@pytest.mark.parametrize(
+    "base, want",
+    [
+        pytest.param(
+            datetime(2026, 3, 22, 18, 30, 0, 0, tzinfo=timezone(timedelta(hours=8))),
+            "2026-03-22T18:30:00.000+08:00",
+            id="whole second still carries a fraction",
+        ),
+        pytest.param(
+            datetime(2026, 3, 22, 18, 30, 0, 123000, tzinfo=timezone(timedelta(hours=8))),
+            "2026-03-22T18:30:00.123+08:00",
+            id="millisecond",
+        ),
+        pytest.param(
+            datetime(2026, 3, 22, 10, 30, 0, 5000, tzinfo=timezone.utc),
+            "2026-03-22T10:30:00.005Z",
+            id="leading zeros in the fraction are kept, utc renders Z",
+        ),
+        pytest.param(
+            datetime(2026, 3, 22, 18, 30, 0, 999999, tzinfo=timezone(timedelta(hours=8))),
+            "2026-03-22T18:30:00.999+08:00",
+            id="sub-millisecond truncates, never rounds up",
+        ),
+    ],
+)
+def test_rfc3339_renderer_keeps_a_fixed_width_fraction(base: datetime, want: str) -> None:
+    got = _format_rfc3339(base)
+    assert got == want
+    assert _RFC3339.match(got), got
+
+
+def test_publish_timestamp_has_millisecond_precision() -> None:
+    instance, messenger = _instance()
+
+    before = datetime.now().astimezone()
+    instance.publish("output1", {"temp": 25.34, "label": "ok", "count": 7})
+    after = datetime.now().astimezone()
+
+    _, timestamp, _ = envelope_of(messenger.published[0].data)
+    assert _RFC3339.match(timestamp), timestamp
+
+    # A hardcoded ".000" would satisfy the shape check, so the stamp is also
+    # pinned to the wall clock it claims to record. The lower bound is truncated
+    # because the renderer truncates.
+    published = datetime.fromisoformat(timestamp)
+    assert published.tzinfo is not None
+    assert before.replace(microsecond=(before.microsecond // 1000) * 1000) <= published <= after
+
+
+def test_publish_separates_messages_within_the_same_second() -> None:
+    """NEO-7263: tags are polled on millisecond intervals, so two publishes
+    inside the same second must not collapse onto one timestamp — which is
+    exactly what the previous second-precision format did."""
+    instance, messenger = _instance()
+
+    def publish_timestamp() -> str:
+        instance.publish("output1", {"temp": 25.34, "label": "ok", "count": 7})
+        return envelope_of(messenger.published[-1].data)[1]
+
+    # The pair is retried so the assertion always lands on two publishes that
+    # share a second — a pair straddling a second boundary would differ even
+    # under the old format and prove nothing.
+    first = second = ""
+    for _attempt in range(5):
+        first = publish_timestamp()
+        time.sleep(0.002)  # guarantees the millisecond advances
+        second = publish_timestamp()
+        if first[:_SECOND_PRECISION_WIDTH] == second[:_SECOND_PRECISION_WIDTH]:
+            break
+
+    assert first[:_SECOND_PRECISION_WIDTH] == second[:_SECOND_PRECISION_WIDTH], (
+        f"could not observe two publishes within one second: {first!r} and {second!r}"
+    )
+    assert first != second, f"two publishes 2ms apart share the timestamp {first!r}"
+
+
+def test_publish_keeps_timestamp_wire_compatible() -> None:
+    """Interop with consumers built against the second-precision format: they
+    read ``timestamp`` as text, so the CBOR major type must not change and the
+    value must stay a parseable RFC3339 string. Only the content gains a
+    fraction."""
+    instance, messenger = _instance()
+    instance.publish("output1", {"temp": 25.34, "label": "ok", "count": 7})
+    payload = messenger.published[0].data
+
+    envelope = cbor2.loads(payload)
+    assert isinstance(envelope["timestamp"], str), type(envelope["timestamp"])
+    # Byte-level: CBOR major type 3 (text string) lives in the top 3 bits.
+    timestamp_span = scan_data_map(payload)["timestamp"]
+    assert timestamp_span[0] >> 5 == 3, timestamp_span[:1].hex()
+
+    # The strict decoder rejects a non-text timestamp, so a type change here
+    # would drop the whole message on a peer node rather than one field.
+    _, timestamp, data = decode_neoflow_envelope(payload)
+    assert datetime.fromisoformat(timestamp).tzinfo is not None
+    assert len(data) > 0
 
 
 def test_publish_emits_the_schema_fields_in_schema_order() -> None:
@@ -228,6 +342,37 @@ def test_run_loop_delivers_a_message_decoded_against_the_input_schema() -> None:
         assert message.timestamp == "2026-03-31T09:10:11Z"
         assert message.handle == "input1"
         assert message.to_dict() == {"value": 42, "extra": "x"}
+    finally:
+        instance.shutdown()
+        thread.join(timeout=2.0)
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        pytest.param("2026-03-31T09:10:11Z", id="second precision from an older publisher"),
+        pytest.param("2026-03-31T09:10:11.123+08:00", id="millisecond precision"),
+        pytest.param("2026-03-31T09:10:11.123456789Z", id="nanosecond from a non-SDK publisher"),
+    ],
+)
+def test_run_loop_passes_an_inbound_timestamp_through_verbatim(timestamp: str) -> None:
+    """The receiving half of the interop guarantee: the SDK never parses an
+    inbound timestamp, it hands the string to the handler untouched. So a
+    publisher on either format — and one with a precision neither format uses —
+    is delivered verbatim rather than normalized or rejected."""
+    instance, messenger = _instance()
+    thread = _run_loop(instance)
+    try:
+        _inject(
+            messenger,
+            "input1",
+            encode_data_map([("value", DataType.INT64, 42)]),
+            timestamp=timestamp,
+        )
+        message = next(iter(instance.messages()))
+
+        assert message.timestamp == timestamp
+        assert message.to_dict()["value"] == 42
     finally:
         instance.shutdown()
         thread.join(timeout=2.0)

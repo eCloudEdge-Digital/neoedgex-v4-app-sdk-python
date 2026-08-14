@@ -70,6 +70,10 @@ BATTERY = [
 
 
 def _now_rfc3339() -> str:
+    # Deliberately second-precision, unlike the millisecond stamp both SDKs now
+    # publish: the harness plays an upstream peer on the older format, so every
+    # scenario below doubles as proof that a second-precision publisher still
+    # interoperates with both SDKs over a real broker.
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
