@@ -45,7 +45,7 @@ services:
         "cp -r /sdk /tmp/sdk && pip install --quiet --root-user-action=ignore /tmp/sdk cbor2 && exec python -u /app/main.py",
       ]
     environment:
-      SETUPTOOLS_SCM_PRETEND_VERSION: "2.0.0"
+      SETUPTOOLS_SCM_PRETEND_VERSION: "2.1.0"
     volumes:
       - ../../src:/sdk/src:ro
       - ../../pyproject.toml:/sdk/pyproject.toml:ro

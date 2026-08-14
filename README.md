@@ -28,7 +28,7 @@ The runtime dependencies (`paho-mqtt` for transport, `cbor2` for the message enc
 If you need to install a specific version, use the release tag instead:
 
 ```bash
-python3 -m pip install "neoedgex-v4-app-sdk-python @ git+https://github.com/eCloudEdge-Digital/neoedgex-v4-app-sdk-python.git@v2.0.0"
+python3 -m pip install "neoedgex-v4-app-sdk-python @ git+https://github.com/eCloudEdge-Digital/neoedgex-v4-app-sdk-python.git@v2.1.0"
 ```
 
 A minimal app implements `neoedgex.NodeHandler` and starts with `neoedgex.new(...).run()`:

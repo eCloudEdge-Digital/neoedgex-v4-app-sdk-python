@@ -1,4 +1,4 @@
-# Real-broker integration test (Go SDK v2.1.0 ↔ Python SDK 2.0.0)
+# Real-broker integration test (Go SDK v2.1.0 ↔ Python SDK 2.1.0)
 
 Runs both SDKs against a real mosquitto broker over the full production path:
 config files mounted at `/opt/neoedgex/config`, the hard-wired broker name
