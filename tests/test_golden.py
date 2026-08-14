@@ -11,6 +11,8 @@ path. This is the main protection against the two SDKs drifting apart:
   the design deliberately deviates (DEV-1 / DEV-2) and ``py_expect`` wins.
 * ``encode_cases`` go through ``convert_to_typed_value`` + ``encode_field``
   and are compared byte for byte; ``expect_error`` rows must raise instead.
+  ``py_expect_hex`` mirrors ``py_expect`` for this direction: it wins over
+  ``expect_hex`` where the design deliberately deviates from the Go bytes.
   ``py_only`` marks a row Go has no way to express (an int wider than uint64)
   and is provenance, not a control flag — such a row still says what it
   expects through ``expect_error``.
@@ -135,6 +137,11 @@ def test_decode_case(case: dict[str, Any]) -> None:
         assert got == want
 
 
+def _expected_hex(case: dict[str, Any]) -> str:
+    """Encode-side mirror of the ``py_expect`` precedence rule."""
+    return case.get("py_expect_hex", case["expect_hex"])
+
+
 def _encode_input(case: dict[str, Any]) -> Any:
     kind = case["in_kind"]
     raw = case["in_value"]
@@ -169,7 +176,7 @@ def test_encode_case(case: dict[str, Any]) -> None:
 
     if case["in_kind"] == "null":
         # A missing / nil field never reaches the converter: it publishes null.
-        assert encode_field(None, declared).hex() == case["expect_hex"]
+        assert encode_field(None, declared).hex() == _expected_hex(case)
         return
 
     value = _encode_input(case)
@@ -179,7 +186,7 @@ def test_encode_case(case: dict[str, Any]) -> None:
         return
 
     typed = convert_to_typed_value(value, declared)
-    assert encode_field(typed, declared).hex() == case["expect_hex"]
+    assert encode_field(typed, declared).hex() == _expected_hex(case)
 
 
 @pytest.mark.parametrize("fixture", ENVELOPE_FIXTURES)

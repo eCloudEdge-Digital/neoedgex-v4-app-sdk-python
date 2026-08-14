@@ -332,8 +332,13 @@
       "declared": "string",
       "expect": {
         "kind": "string",
+        "value": "2.534e+01"
+      },
+      "py_expect": {
+        "kind": "string",
         "value": "25.34"
-      }
+      },
+      "py_note": "DEV-3: v2.2.0 canonical float strings use fixed-point shortest form; Go v2.1.0 published scientific notation"
     },
     {
       "name": "f32_into_string",
@@ -341,9 +346,13 @@
       "declared": "string",
       "expect": {
         "kind": "string",
+        "value": "2.534000015258789e+01"
+      },
+      "py_expect": {
+        "kind": "string",
         "value": "25.34"
       },
-      "note": "v2.2.0: a single-precision wire value keeps its 32-bit identity into the string, so it reads as the value the sender meant. v2.1.0 delivered the widened double instead (25.34000015258789)."
+      "py_note": "DEV-3: fixed-point since v2.2.0; a single-precision wire value also keeps its 32-bit identity into the string, where v2.1.0 delivered the widened double (2.534000015258789e+01)"
     },
     {
       "name": "bool_into_string",
@@ -935,8 +944,10 @@
       "declared": "string",
       "in_kind": "float",
       "in_value": "25.34",
-      "expect_hex": "6532352e3334",
-      "note": "fixed-point shortest form since v2.2.0 canonical float strings, e.g. 25.34; pre-v2.2.0 published 2.534e+01"
+      "expect_hex": "69322e353334652b3031",
+      "note": "scientific shortest form, e.g. 2.534e+01",
+      "py_expect_hex": "6532352e3334",
+      "py_note": "DEV-3: fixed-point shortest form since v2.2.0 canonical float strings, e.g. 25.34"
     },
     {
       "name": "bool_into_string",
@@ -990,6 +1001,5 @@
       "py_only": true,
       "note": "Python-only: source int outside [MinInt64, MaxUint64] has no schema type; reject, never emit CBOR bignum"
     }
-  ],
-  "note": "Rows f64_into_string / f32_into_string / float_into_string_sci carry v2.2.0 expectations: the float-to-string conversion moved from scientific to fixed-point notation, so their expect values are Go v2.2.0 output (verified against the local Go SDK), not v2.1.0's."
+  ]
 }
