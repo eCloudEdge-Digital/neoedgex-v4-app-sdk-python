@@ -4,7 +4,7 @@ This document records the Python SDK architecture and runtime contract. External
 
 ## Purpose
 
-The SDK lets third-party developers build NeoEdgeX node applications in Python while reusing the same runtime model — and, since 2.0.0, the same wire contract — as the Go SDK (Go v2.1.0):
+The SDK lets third-party developers build NeoEdgeX node applications in Python while reusing the same runtime model — and, since 2.0.0, the same wire contract — as the Go SDK (Go v2.2.0):
 
 - receive NeoFlow messages through `ctx.messages()`
 - read raw node configuration through `ctx.node_config()`
@@ -97,11 +97,11 @@ Topic compatibility is kept aligned with the Go SDK:
 - node error: `neoedgex/neoflow/error/{nodeID}`
 - heartbeat: `neoedgex/neoflow/heartbeat/{nodeID}`
 
-`ctx.publish(handle, ...)` looks up the output schema for the handle, converts each value with `convert_to_typed_value`, and encodes the CBOR envelope with a current local-offset RFC3339 timestamp, rendered to millisecond precision by `_format_rfc3339` (fixed three-digit fraction, sub-millisecond truncated — byte-identical to the Go SDK's `2006-01-02T15:04:05.000Z07:00` layout for the same instant). Missing keys, explicit `None`, and per-field conversion failures all encode as CBOR null; a conversion failure additionally reports a node error, but the publish itself still goes out. Only data messages are CBOR: the error topic payload stays JSON and heartbeats stay empty.
+`ctx.publish(handle, ...)` looks up the output schema for the handle, converts each value with `convert_to_typed_value`, and encodes the CBOR envelope with a current UTC RFC3339 timestamp, rendered to millisecond precision by `_format_rfc3339` (fixed three-digit fraction, sub-millisecond truncated, always `Z` because the clock is read as UTC — byte-identical to the Go SDK's `2006-01-02T15:04:05.000Z07:00` layout for the same instant; the renderer itself still emits a numeric offset for a non-UTC datetime passed in directly). Missing keys, explicit `None`, and per-field conversion failures all encode as CBOR null; a conversion failure additionally reports a node error, but the publish itself still goes out. Only data messages are CBOR: the error topic payload stays JSON and heartbeats stay empty.
 
 Inbound payloads have their envelope decoded eagerly (`source`, `timestamp`); the `data` section is kept as raw bytes on the `Message` and decoded when the handler asks (see the previous section).
 
-Cross-language equivalence is guarded by `tests/testdata/golden/` — decode rows, encode rows, and envelope vectors produced by actually running Go SDK v2.1.0 — replayed by `tests/test_golden.py`, field-encoded bytes compared exactly.
+Cross-language equivalence is guarded by `tests/testdata/golden/` — decode rows, encode rows, and envelope vectors produced by actually running the Go SDK (the v2.1.0 fixture from released v2.1.0, the v2.2.0 fixture from the pending v2.2.0 release) — replayed by `tests/test_golden.py`, field-encoded bytes compared exactly.
 
 ## Mock Mode
 

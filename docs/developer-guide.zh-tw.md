@@ -13,7 +13,7 @@ NeoEdgeX App SDK Python v4 是用來開發 NeoEdgeX 節點應用程式的 Python
 
 節點生命週期、訊息傳輸、心跳、錯誤回報、關閉流程，以及 mock 模式，由 SDK 統一處理。
 
-Python SDK 2.0.0 講的是 NeoFlow 的 CBOR 訊息格式：任何實作同一份格式的節點都能與 Python 節點逐位元組相容地交換 NeoFlow 訊息，`tests/testdata/golden/` 裡的 golden fixture 由實際運行的對端節點錄製而來，每次測試都會回放到 Python 的編解碼路徑上。
+Python SDK 2.x 講的是 NeoFlow 的 CBOR 訊息格式：任何實作同一份格式的節點都能與 Python 節點逐位元組相容地交換 NeoFlow 訊息，`tests/testdata/golden/` 裡的 golden fixture 由實際運行的對端節點錄製而來，每次測試都會回放到 Python 的編解碼路徑上。
 
 ## 公開可依賴邊界
 
@@ -349,7 +349,7 @@ NeoFlow 節點之間透過 MQTT 互相傳訊息：一則資料訊息就是一個
 - `handle`：觸發此訊息的 input handle 名稱
 - `raw`：原樣持有這則訊息的 `data` 段，內容仍是 CBOR 編碼；不直接讀取，而是以 `msg.to_dict()` 或 `msg.to_dataclass(...)` 解碼取值
 - `source`：來源節點 ID
-- `timestamp`：上游節點 publish 的時間，RFC3339 格式、精度到毫秒（`2026-03-22T18:30:00.123+08:00`）。它取自該節點自己的時鐘，因此除非機器跑在 UTC，否則會帶本地時區偏移（例如 `+08:00`）而不是 `Z`。上游 payload 未帶時間時為空字串——mock 注入的訊息一律如此。SDK 原封不動地傳遞這個字串，因此以舊版 SDK 發送的節點仍會帶精度到秒、沒有小數位的時間戳——`datetime.fromisoformat` 兩種都讀得了
+- `timestamp`：上游節點 publish 的時間，RFC3339 格式。本版 SDK 的節點以 UTC 寫入毫秒精度，因此結尾為 `Z`（`2026-03-22T10:30:00.123Z`）。SDK 原封不動地傳遞這個字串且從不驗證，因此其形式取決於發送端：舊版 SDK 的節點寫入秒精度、不帶小數位；時鐘不在 UTC 的節點寫入本地時區偏移（例如 `+08:00`）。請以 `datetime.fromisoformat` 解析（上述形式皆可讀取），不要做字面比對。上游 payload 完全未帶時間時為空字串
 
 ### 讀取 Input 值
 
@@ -846,12 +846,12 @@ class ExampleApp:
                 ctx.report_error(neoedgex.CodeProcessError, err)
 ```
 
-步驟 3：SDK 在 publisher 這一側把 Python 值轉成 schema 型別後，把整則訊息編碼成 CBOR。訊息最外層有三個欄位：`source`（發送的節點）、`timestamp`（發送當下的時間，RFC3339 格式、精度到毫秒，取自容器的時鐘，因此帶本地時區偏移、未必是 `Z`）與 `data`（你 publish 的欄位）。以下以 CBOR diagnostic notation（CBOR 的人類可讀表示法）呈現——每個欄位直接帶原生值，沒有 per-field type 包裝：
+步驟 3：SDK 在 publisher 這一側把 Python 值轉成 schema 型別後，把整則訊息編碼成 CBOR。訊息最外層有三個欄位：`source`（發送的節點）、`timestamp`（發送當下的時間，RFC3339 格式、精度到毫秒，取自容器的時鐘並以 UTC 呈現，因此不論容器跑在哪個時區都以 `Z` 結尾）與 `data`（你 publish 的欄位）。以下以 CBOR diagnostic notation（CBOR 的人類可讀表示法）呈現——每個欄位直接帶原生值，沒有 per-field type 包裝：
 
 ```text
 {
   "source": "publisher-node",
-  "timestamp": "2026-03-22T18:30:00.123+08:00",
+  "timestamp": "2026-03-22T10:30:00.123Z",
   "data": {
     "temperature": 25.5,
     "running": true,
@@ -864,7 +864,7 @@ class ExampleApp:
 
 ```python
 # msg.handle == "input1"、msg.source == "publisher-node"、
-# msg.timestamp == "2026-03-22T18:30:00.123+08:00"
+# msg.timestamp == "2026-03-22T10:30:00.123Z"
 
 data = msg.to_dict()
 # data == {
@@ -955,7 +955,7 @@ if __name__ == "__main__":
 - 訊息每個 tick 注入一則，從清單頭開始輪替；app 啟動後約半秒開始。要同時測多個 input，就每個 input 各列一則訊息，讓它們輪流注入。
 - `messageInterval` 是 duration 字串：一至多個「數字＋單位」組合，可帶小數，單位為 `ns`、`us`、`ms`、`s`、`m`、`h`——例如 `"3s"`、`"500ms"`、`"1.5s"`、`"1m30s"`。未填、無法解析或非正值時，一律退回 3s，且不報錯。
 - 注入的值維持字串化的 `type`/`value` 形式：浮點用科學記號（`"2.55e+01"`）、`raw` 用 base64 文字、bool 用 `"true"` / `"false"`。SDK 在注入時把每筆值轉成原生值並編成真正的 CBOR 訊息，handler 讀到的解碼結果與正式環境一致。`type` 留空的欄位會注入成 undefined，這就是測試 `None` 路徑的方法。條目或 schema 欄位上殘留的舊 `format` 鍵會被容忍並忽略（釘在 `tests/test_mock.py`）。
-- 注入的訊息一律帶 `source` `"mock"`，`timestamp` 為空字串。
+- 注入的訊息一律帶 `source` `"mock"`，`timestamp` 則取自 publish 路徑同一個 UTC 時鐘，因此 mock 執行也看得到正式環境的格式。
 - 沒有真實 broker，因此 handler publish 的內容只看得到 log：`[MOCK PUBLISH]` 行會帶出 topic 與解碼後的 payload。heartbeat 也以同樣形式出現，payload 為空。呼叫 `disable_sdk_log()` 會把這些全部關掉。
 
 `neoedgex.load_mock_config(...)` 是 `neoedgex.mock.load_config(...)` 的便捷入口。mock main 已 import `neoedgex.mock` 時，建議直接用 `mock.load_config(...)`，讓 mock 設定的來源保持明確。
@@ -999,7 +999,7 @@ def test_example_app() -> None:
 要記得的事：
 
 - `published_data` 原樣記錄 handler 傳給 `publish` 的那個 dict：不會依 output schema 做型別轉換，也不會丟掉任何 key。因此要斷言的是 handler 產生的值，而不是實際會送到下游的內容。
-- `testutil` 建出的訊息帶 source `"upstream-node"`、timestamp `"2026-01-01T00:00:00Z"`；建好後對 `msg.source` / `msg.timestamp` 賦值即可覆寫。
+- `testutil` 建出的訊息帶 source `"upstream-node"`、timestamp `"2026-01-01T00:00:00.000Z"`；建好後對 `msg.source` / `msg.timestamp` 賦值即可覆寫。
 
 手邊沒有節點設定時——例如只想單獨測解碼邏輯——可用 `testutil.new_message(handle, {...})`，把宣告型別直接寫在值旁邊：`{"level": (testutil.Single(25.34), DataType.DOUBLE)}` 重現的是上游以單精度送出的 `double` tag，`testutil.UNDECLARED` 則標記 input schema 未宣告的 key。值依其 Python 型別編碼（裸 float 編成雙精度、`testutil.Single` 編成單精度），與宣告型別無關——正式環境裡兩端 schema 本來就互相獨立。
 
@@ -1072,6 +1072,7 @@ class ExampleApp:
 
 - **訊息時間戳精度到毫秒。** 最外層 `timestamp` 由整秒改為 RFC3339 帶固定三位小數（`2026-03-22T10:30:00.123Z`），因此同一秒內採樣的資料不再被寫成相同時間。次毫秒的位數採截斷而非四捨五入，且同一瞬間與 Go SDK 產生的字串逐位元組相同。欄位仍為 CBOR text string，`datetime.fromisoformat` 可讀取兩種形式，故仍以秒精度發送的節點雙向皆可互通。以固定長度樣式驗證時間戳、或以未帶 `%f` 的 `strptime` 解析的 consumer 必須調整。
 - **修正**字串轉 `float` 的捨入：改為如 Go 的 `strconv.ParseFloat(s, 32)` 一般，從字串一次直接捨入到 float32，不再經由 float64 中轉。原本的兩段捨入在字串落於捨入邊界時會選到相鄰的 float32（`"7.038531e-26"`），在 float32 溢位邊界上更可能拒絕一個 Go SDK 會接受為 MaxFloat32 的值——同一個 tag 值一端轉得過、另一端轉不過。預期結果已逐位元對照 Go 的輸出釘住；`double` 的轉換原本即為單次捨入，不受影響。
+- **Publish 的時間戳一律為 UTC。** 最外層 `timestamp` 取自 UTC 時鐘，因此結尾一律為 `Z`，不再帶容器的本地時區偏移。接收端行為不變：收到的 timestamp 原封交給 handler 且從不驗證，無論其時區或精度。Mock 模式與 `testutil` 比照 publish 形式——mock 注入的訊息帶 UTC 毫秒時間戳，不再是空字串；`testutil` 的預設訊息時間戳由 `"2026-01-01T00:00:00Z"` 改為 `"2026-01-01T00:00:00.000Z"`。假設帶本地偏移的 consumer，以及對上述任一字面值做精確比對的測試，必須調整。判斷訊息是否來自 mock，請依來源 `"mock"`，而非依時間戳為空。
 
 ### v2.0.0 — 2026-08-10
 

@@ -1,16 +1,26 @@
-"""Shared test doubles and wire-inspection helpers.
+"""Shared test doubles, wire-inspection helpers and environment fixtures.
 
 Lives next to the tests (not in the package) so the SDK ships nothing that
 exists only for its own test suite. ``testutil`` is the *public* helper
 surface and is exercised as production code by ``test_testutil.py``.
+
+Fixtures defined here are shared by importing them into a test module by name
+(``from support import non_utc_local_zone``), the same way the doubles are
+shared; pytest picks up a fixture bound in the module under test.
 """
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime, timedelta
+from typing import Any, Final
+
+import pytest
 
 from neoedgex.contract import DataType, Node, NodeData, PortFieldSchema
 from neoedgex.contract.codec import decode_neoflow_envelope, scan_data_map
@@ -167,3 +177,67 @@ def data_spans(payload: bytes) -> dict[str, bytes]:
     """key -> raw CBOR bytes of each field of a published data message, in
     wire order."""
     return scan_data_map(envelope_of(payload)[2])
+
+
+# The zone the local-time fixture moves the process to: +08:00 and, unlike most
+# zones, free of DST, so the offset a test observes is the same all year. The
+# POSIX spelling carries its offset inline instead of naming a tz database file,
+# which is the fallback for a host that ships no tzdata (many slim containers).
+# Its sign is inverted by the POSIX convention: "UTC-8" is eight hours *east*.
+_NON_UTC_ZONE: Final = "Asia/Taipei"
+_NON_UTC_ZONE_POSIX: Final = "UTC-8"
+
+
+def _local_utcoffset() -> timedelta:
+    """The offset ``datetime.now().astimezone()`` — the call a publish-path
+    regression would reach for — currently resolves to."""
+    offset = datetime.now().astimezone().utcoffset()
+    assert offset is not None, "astimezone() always returns an aware datetime"
+    return offset
+
+
+@pytest.fixture
+def non_utc_local_zone(monkeypatch: pytest.MonkeyPatch) -> Iterator[timedelta]:
+    """Move the process's *local* timezone off UTC for the duration of one test.
+
+    Publish-path assertions that a stamp ends in ``Z`` only have teeth on a host
+    whose local zone is not already UTC. With ``TZ`` unset — the default in most
+    CI containers — reverting the clock read to ``datetime.now().astimezone()``
+    still renders a ``Z``-terminated string, so the regression passes silently.
+    ``datetime.now().astimezone()`` resolves the local zone through
+    ``time.localtime``, which re-reads ``TZ`` after ``time.tzset()``, so setting
+    ``TZ`` here makes the difference observable on any host.
+
+    ``time.tzset`` is Unix-only. This SDK targets Python >= 3.11 on Linux and
+    macOS, so it is called unguarded; the fixture would need a guard before the
+    suite could run on Windows.
+
+    Yields the offset actually achieved, so a test can assert its own harness is
+    armed rather than trusting it.
+    """
+    # The undo is explicit, not left to monkeypatch's own teardown: that runs
+    # *after* this fixture's, which would re-read TZ while it was still patched
+    # and leak a non-UTC local zone into every later test. Restoring TZ first
+    # and re-reading it second is what keeps the process clean. Undoing twice is
+    # harmless — monkeypatch's own teardown then finds nothing left to revert.
+    try:
+        monkeypatch.setenv("TZ", _NON_UTC_ZONE)
+        time.tzset()
+        offset = _local_utcoffset()
+        if offset == timedelta(0):
+            # No tz database: an unknown TZ name silently resolves to UTC, which
+            # would make the caller's assertion vacuous again — the very failure
+            # mode this fixture exists to remove.
+            monkeypatch.setenv("TZ", _NON_UTC_ZONE_POSIX)
+            time.tzset()
+            offset = _local_utcoffset()
+        if offset == timedelta(0):
+            pytest.fail(
+                "could not move the local timezone off UTC "
+                f"(TZ={os.environ.get('TZ')!r} still resolves to a zero offset), "
+                "so a UTC-forcing assertion would pass vacuously"
+            )
+        yield offset
+    finally:
+        monkeypatch.undo()
+        time.tzset()

@@ -1,0 +1,12 @@
+{
+  "generated_by": "NEO-7263 fixturegen (scratch tool, not versioned; see regen)",
+  "go_sdk": "neoedgex-v4-app-sdk-go v2.2.0 (pending release; working tree at 5539af9 plus the uncommitted UTC timestamp change)",
+  "regen": "write this generator into a scratch dir with go.mod replace -\u003e local Go SDK checkout carrying the v2.2.0 timestamp change, then: go mod tidy \u0026\u0026 go run . \u003e neoflow_v2_2_0.json",
+  "note": "Envelope only. The field conversion matrix is unchanged by the timestamp work and stays in neoflow_v2_1_0.json, which also remains the pinned old-format (second-precision, 1-byte text head) envelope.",
+  "envelope": {
+    "source": "node-a",
+    "timestamp": "2026-03-31T09:10:11.123Z",
+    "data_map_hex": "a1616b01",
+    "message_hex": "a366736f75726365666e6f64652d616974696d657374616d707818323032362d30332d33315430393a31303a31312e3132335a6464617461a1616b01"
+  }
+}

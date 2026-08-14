@@ -11,6 +11,7 @@ from neoedgex.contract import DataType, PortFieldData, RawMessengerPayload
 from neoedgex.contract.codec import encode_data_map, encode_neoflow_message
 
 from .messenger import _QUEUE_CLOSED
+from .node import _now_rfc3339
 
 
 class MockMessenger:
@@ -90,9 +91,10 @@ class MockMessenger:
                 raise ValueError(f"mock field '{key}': {exc}") from exc
             entries.append((key, field.type, value))
         # The source is hard-coded as "mock" so handlers can distinguish
-        # injected mock messages from real upstream-node messages; injected
-        # messages carry no timestamp (mirrors Go injectNeoFlowMessage).
-        message = encode_neoflow_message("mock", "", encode_data_map(entries))
+        # injected mock messages from real upstream-node messages. The timestamp
+        # comes from the publish path's clock so local runs see the production
+        # shape instead of an empty string.
+        message = encode_neoflow_message("mock", _now_rfc3339(), encode_data_map(entries))
         with self._lock:
             subscriber = self._subscribers.get(node_id)
             if subscriber is None:

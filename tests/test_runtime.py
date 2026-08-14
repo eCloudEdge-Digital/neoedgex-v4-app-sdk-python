@@ -29,11 +29,22 @@ from neoedgex.contract.codec import (
     encode_neoflow_message,
     scan_data_map,
 )
-from support import FakeMessenger, FakeSDK, RecordingLogger, data_spans, envelope_of, make_node
+from support import (
+    FakeMessenger,
+    FakeSDK,
+    RecordingLogger,
+    data_spans,
+    envelope_of,
+    make_node,
+    non_utc_local_zone,  # noqa: F401  -- imported to register the fixture
+)
 
 # RFC3339 with exactly three fractional digits: the shape a fixed-width
-# fraction guarantees even when the clock lands on a whole second.
+# fraction guarantees even when the clock lands on a whole second. The renderer
+# stays offset-capable for a datetime handed to it directly, so only the
+# publish-output form is pinned to ``Z``.
 _RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}(Z|[+-]\d{2}:\d{2})$")
+_PUBLISHED_RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 
 # The whole-second prefix two stamps share when only their fraction differs.
 _SECOND_PRECISION_WIDTH = len("2006-01-02T15:04:05")
@@ -83,9 +94,12 @@ def test_publish_topic_qos_and_envelope() -> None:
     assert record.qos == 2
     source, timestamp, _ = envelope_of(record.data)
     assert source == "node-1"
-    assert _RFC3339.match(timestamp), timestamp
+    assert _PUBLISHED_RFC3339.match(timestamp), timestamp
+    # Publishing reads the clock as UTC, so the stamp cannot regress to the
+    # machine's local offset — both SDKs render one instant as one string.
+    assert timestamp.endswith("Z"), timestamp
     # An RFC3339 timestamp Python itself can read back, timezone included.
-    assert datetime.fromisoformat(timestamp).tzinfo is not None
+    assert datetime.fromisoformat(timestamp).tzinfo == timezone.utc
 
 
 # The renderer is asserted directly, because the clock-driven tests below cannot
@@ -132,13 +146,47 @@ def test_publish_timestamp_has_millisecond_precision() -> None:
     after = datetime.now().astimezone()
 
     _, timestamp, _ = envelope_of(messenger.published[0].data)
-    assert _RFC3339.match(timestamp), timestamp
+    assert _PUBLISHED_RFC3339.match(timestamp), timestamp
+    assert timestamp.endswith("Z"), timestamp
 
     # A hardcoded ".000" would satisfy the shape check, so the stamp is also
     # pinned to the wall clock it claims to record. The lower bound is truncated
     # because the renderer truncates.
     published = datetime.fromisoformat(timestamp)
     assert published.tzinfo is not None
+    assert before.replace(microsecond=(before.microsecond // 1000) * 1000) <= published <= after
+
+
+def test_publish_stamps_utc_even_when_the_host_zone_is_not_utc(
+    non_utc_local_zone: timedelta,
+) -> None:
+    """The teeth behind the ``Z`` assertions above. Those also hold on a host
+    that is *already* UTC, which is what ``TZ`` unset gives most CI containers:
+    there, reading the clock as local time still renders a ``Z``-terminated
+    string and a regression to ``datetime.now().astimezone()`` would pass
+    unnoticed. With the local zone forced off UTC, the two ways this can break
+    are both fatal — a local read renders a numeric offset instead of ``Z``, and
+    stamping local wall-clock digits under a ``Z`` suffix moves the instant a
+    whole offset away from now.
+    """
+    # The harness itself is checked, so this can never pass by not being armed.
+    assert non_utc_local_zone != timedelta(0), non_utc_local_zone
+
+    instance, messenger = _instance()
+
+    before = datetime.now(timezone.utc)
+    instance.publish("output1", {"temp": 25.34, "label": "ok", "count": 7})
+    after = datetime.now(timezone.utc)
+
+    _, timestamp, _ = envelope_of(messenger.published[0].data)
+    assert _PUBLISHED_RFC3339.match(timestamp), timestamp
+    assert timestamp.endswith("Z"), timestamp
+
+    published = datetime.fromisoformat(timestamp)
+    assert published.tzinfo == timezone.utc
+    # Not merely Z-suffixed but the correct instant: local digits mislabelled as
+    # UTC would land outside this window by the offset above. Lower bound is
+    # truncated because the renderer truncates.
     assert before.replace(microsecond=(before.microsecond // 1000) * 1000) <= published <= after
 
 

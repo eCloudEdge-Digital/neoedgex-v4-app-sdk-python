@@ -5,7 +5,7 @@ import queue
 import threading
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from neoedgex.contract import DataType, ErrorCode, Event, Message, Node, convert_to_typed_value
@@ -310,9 +310,10 @@ class NodeInstance:
 
 
 def _format_rfc3339(base: datetime) -> str:
-    # Millisecond-precision ISO 8601 rendering of an aware datetime. Output uses
-    # a numeric offset (e.g. ``+08:00``) and a ``Z`` suffix is normalized for
-    # UTC.
+    # Millisecond-precision ISO 8601 rendering of an aware datetime. A zero
+    # offset renders as ``Z``, any other offset as a numeric ``+08:00`` form;
+    # the publish path always hands this UTC, so a published stamp always ends
+    # in ``Z``.
     #
     # Tags are polled on millisecond intervals, so a second-precision stamp
     # collapses every sample taken within the same second into one
@@ -331,4 +332,6 @@ def _format_rfc3339(base: datetime) -> str:
 
 
 def _now_rfc3339() -> str:
-    return _format_rfc3339(datetime.now().astimezone())
+    # UTC rather than the container's local time, so the same instant published
+    # from any timezone yields one identical string across both SDKs.
+    return _format_rfc3339(datetime.now(timezone.utc))

@@ -13,7 +13,7 @@ NeoEdgeX App SDK Python v4 is the Python SDK for building NeoEdgeX node applicat
 
 The SDK also handles node lifecycle, message transport, heartbeats, error reporting, shutdown, and mock mode.
 
-Python SDK 2.0.0 speaks the NeoFlow CBOR message format: any node that implements the same format exchanges NeoFlow messages with a Python node byte-compatibly, and the golden fixture in `tests/testdata/golden/` — recorded from a live peer node — is replayed through the Python encode/decode path on every test run.
+Python SDK 2.x speaks the NeoFlow CBOR message format: any node that implements the same format exchanges NeoFlow messages with a Python node byte-compatibly, and the golden fixtures in `tests/testdata/golden/` — recorded from a live peer node — are replayed through the Python encode/decode path on every test run.
 
 ## Public Surface
 
@@ -349,7 +349,7 @@ Each handler receives a `neoedgex.NodeEnv`.
 - `handle`: which input handle triggered this message
 - `raw`: the `data` section of the received message exactly as it arrived, still CBOR-encoded; you do not read it directly — decode it with `msg.to_dict()` or `msg.to_dataclass(...)`
 - `source`: source node ID
-- `timestamp`: the time the upstream node published, in RFC3339 format with millisecond precision (`2026-03-22T18:30:00.123+08:00`). It is written from that node's own clock, so expect a local offset such as `+08:00` rather than `Z` unless the machine runs on UTC. It is an empty string when the upstream payload carries no time, which is the case for every mock-injected message. The SDK passes the string through untouched, so a node publishing from an older SDK still arrives with a second-precision stamp and no fraction — `datetime.fromisoformat` reads both
+- `timestamp`: the time the upstream node published, in RFC3339 format. A node on this SDK version writes millisecond precision in UTC, so its stamp ends in `Z` (`2026-03-22T10:30:00.123Z`). The SDK passes the string through untouched and never validates it, so the form is whatever the sender wrote: a node on an older SDK writes second precision with no fraction, and a node whose clock is not UTC writes a local offset such as `+08:00`. Parse it with `datetime.fromisoformat`, which reads all of these, rather than matching it literally. It is an empty string when the upstream payload carries no time at all
 
 ### Reading Input Values
 
@@ -848,12 +848,12 @@ class ExampleApp:
                 ctx.report_error(neoedgex.CodeProcessError, err)
 ```
 
-Step 3: on the publisher side, the SDK converts those Python values to the schema types and encodes the whole message as CBOR. The message has three top-level fields: `source` (the publishing node), `timestamp` (the moment of publication, in RFC3339 with millisecond precision, taken from the container's clock — so it carries the local UTC offset, not necessarily `Z`), and `data` (your published fields). Shown here in CBOR diagnostic notation, the human-readable rendering of CBOR — each field carries its native value, with no per-field type wrapper:
+Step 3: on the publisher side, the SDK converts those Python values to the schema types and encodes the whole message as CBOR. The message has three top-level fields: `source` (the publishing node), `timestamp` (the moment of publication, in RFC3339 with millisecond precision, taken from the container's clock and rendered in UTC — so it always ends in `Z`, whatever timezone the container runs in), and `data` (your published fields). Shown here in CBOR diagnostic notation, the human-readable rendering of CBOR — each field carries its native value, with no per-field type wrapper:
 
 ```text
 {
   "source": "publisher-node",
-  "timestamp": "2026-03-22T18:30:00.123+08:00",
+  "timestamp": "2026-03-22T10:30:00.123Z",
   "data": {
     "temperature": 25.5,
     "running": true,
@@ -866,7 +866,7 @@ Step 4: when a downstream node receives that payload on its own `input1`, the ha
 
 ```python
 # msg.handle == "input1", msg.source == "publisher-node",
-# msg.timestamp == "2026-03-22T18:30:00.123+08:00"
+# msg.timestamp == "2026-03-22T10:30:00.123Z"
 
 data = msg.to_dict()
 # data == {
@@ -957,7 +957,7 @@ What that file has to get right:
 - messages are injected one per tick, cycling through the list from the top and starting about half a second after the app comes up. To exercise several inputs, list one message per input and let them rotate.
 - `messageInterval` is a duration string: one or more number-plus-unit tokens, decimals allowed, with units `ns`, `us`, `ms`, `s`, `m`, `h` — such as `"3s"`, `"500ms"`, `"1.5s"` or `"1m30s"`. Missing, unparseable, or not positive falls back to 3s, with no error.
 - injected values keep the stringified `type`/`value` form: floats in scientific notation (`"2.55e+01"`), `raw` as base64 text, bool as `"true"` / `"false"`. The SDK converts each entry to its native value at injection time and encodes a real CBOR message, so the handler sees the same decoded values as in production. An entry with an empty `type` injects an undefined field, which is how you exercise the `None` path. A legacy `format` key on an entry or a schema field is tolerated and ignored (pinned in `tests/test_mock.py`).
-- every injected message arrives with `source` `"mock"` and an empty `timestamp`.
+- every injected message arrives with `source` `"mock"` and a `timestamp` stamped from the same UTC clock the publish path uses, so mock runs see the production shape.
 - there is no broker, so what your handler publishes is visible only in the log, as `[MOCK PUBLISH]` lines carrying the topic and the decoded payload. Heartbeats appear the same way, with an empty payload. `disable_sdk_log()` hides all of it.
 
 `neoedgex.load_mock_config(...)` is a convenience wrapper around `neoedgex.mock.load_config(...)`. If your mock main already imports `neoedgex.mock`, prefer keeping `mock.load_config(...)` so the mock configuration source stays explicit.
@@ -1001,7 +1001,7 @@ def test_example_app() -> None:
 Things to keep in mind:
 
 - `published_data` records the dict your handler passed to `publish`, unchanged. Nothing is converted to the output schema types and nothing is dropped, so assert on the values your handler produced, not on what would reach the next node.
-- messages built by `testutil` carry source `"upstream-node"` and timestamp `"2026-01-01T00:00:00Z"`; assign `msg.source` / `msg.timestamp` after building to override.
+- messages built by `testutil` carry source `"upstream-node"` and timestamp `"2026-01-01T00:00:00.000Z"`; assign `msg.source` / `msg.timestamp` after building to override.
 
 Without a node configuration at hand — when testing decode logic on its own — `testutil.new_message(handle, {...})` builds a message with the declared type written next to each value: `{"level": (testutil.Single(25.34), DataType.DOUBLE)}` reproduces a `double` tag the upstream node sent at single precision, and `testutil.UNDECLARED` marks a key the input schema does not declare. The value is encoded by its Python type (a bare float as double precision, `testutil.Single` as single precision), independent of the declared type, exactly as the two schemas are independent in production.
 
@@ -1074,6 +1074,7 @@ This SDK follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Mos
 
 - **Millisecond message timestamps.** The envelope `timestamp` is RFC3339 with a fixed three-digit fraction (`2026-03-22T10:30:00.123Z`) instead of whole seconds, so samples taken within the same second are no longer written as the same time. Sub-millisecond digits are truncated rather than rounded, and the rendering is byte-identical to the Go SDK's for the same instant. The field remains a CBOR text string and `datetime.fromisoformat` reads both forms, so a node still publishing second-precision stamps interoperates in both directions. Consumers that validate the stamp against a fixed-length pattern, or parse it with `strptime` without `%f`, must be updated.
 - **Fixed** string-to-`float` conversion to round the text directly to float32, as Go's `strconv.ParseFloat(s, 32)` does, instead of narrowing through float64. The double rounding could select the adjacent float32 when the text sits on a rounding boundary (`"7.038531e-26"`), and at the float32 overflow boundary could reject a value the Go SDK accepts as MaxFloat32 — the same tag value converting on one SDK and failing on the other. Expected results are pinned bit-for-bit against Go output; `double` conversions were always single-rounded and are unchanged.
+- **Publish timestamps are always UTC.** The envelope `timestamp` is taken in UTC and therefore always ends in `Z`, instead of carrying the container's local offset. Receiving is unchanged: an inbound timestamp is delivered to the handler verbatim and never validated, whatever zone or precision it carries. Mock mode and `testutil` follow the publish form — a mock-injected message carries a UTC millisecond stamp instead of an empty string, and `testutil`'s default message timestamp is now `"2026-01-01T00:00:00.000Z"` rather than `"2026-01-01T00:00:00Z"`. Consumers that assume a local offset, and tests that compare either literal exactly, must be updated. Detect a mock-injected message by its source `"mock"` rather than by an empty timestamp.
 
 ### v2.0.0 — 2026-08-10
 

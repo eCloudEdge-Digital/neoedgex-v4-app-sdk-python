@@ -12,7 +12,7 @@ from neoedgex.contract._limits import MAX_UINT64, MIN_INT64
 from neoedgex.contract.codec import _MAJOR_MAP, _encode_head, _encode_text, encode_field
 
 _MESSAGE_SOURCE: Final = "upstream-node"
-_MESSAGE_TIMESTAMP: Final = "2026-01-01T00:00:00Z"
+_MESSAGE_TIMESTAMP: Final = "2026-01-01T00:00:00.000Z"
 
 
 class _Undeclared:
@@ -83,7 +83,7 @@ def new_message(
     the declared type, as the two schemas are independent in production), and
     the declared type feeds the decode plan — or is ``UNDECLARED`` for a key
     the input schema does not declare. The envelope carries source
-    "upstream-node" and timestamp "2026-01-01T00:00:00Z"; assign
+    "upstream-node" and timestamp "2026-01-01T00:00:00.000Z"; assign
     ``msg.source`` / ``msg.timestamp`` after building to override.
 
     When the node configuration under test is available, prefer

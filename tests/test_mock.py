@@ -1,12 +1,12 @@
 """Mock mode: the config file, and the injection path that turns the config's
 ``{type, value}`` fields into a real CBOR message a handler decodes exactly
-like an upstream one — except that it is stamped source "mock" and carries no
-timestamp."""
+like an upstream one — except that it is stamped source "mock"."""
 
 from __future__ import annotations
 
 import math
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +28,11 @@ from neoedgex.contract import (
 from neoedgex.contract.codec import decode_neoflow_envelope, scan_data_map
 from neoedgex.mock import MockConfig, MockMessage, MockSection, load_config
 from neoedgex import load_mock_config
-from support import RecordingLogger, make_node
+from support import (
+    RecordingLogger,
+    make_node,
+    non_utc_local_zone,  # noqa: F401  -- imported to register the fixture
+)
 
 CONFIG_PATH = Path(__file__).parent / "testdata" / "mock-config.json"
 
@@ -117,10 +121,12 @@ def test_injected_message_round_trips_to_native_values() -> None:
     assert payload.handle == "input1"
 
     source, timestamp, data = decode_neoflow_envelope(payload.data)
-    # Handlers can tell an injected message from a real one by its source;
-    # injected messages carry no timestamp.
+    # Handlers can tell an injected message from a real one by its source; the
+    # timestamp is stamped from the same UTC clock the publish path uses, so a
+    # local run sees the production shape rather than an empty string.
     assert source == "mock"
-    assert timestamp == ""
+    assert timestamp.endswith("Z"), timestamp
+    assert datetime.fromisoformat(timestamp).tzinfo == timezone.utc
 
     message = Message(source, timestamp, handle=payload.handle, raw=data, plan=_MOCK_PLAN)
     assert message.to_dict() == {
@@ -131,6 +137,34 @@ def test_injected_message_round_trips_to_native_values() -> None:
         "name": "sensor-1",
         "nothing": None,
     }
+
+
+def test_injected_timestamp_is_utc_even_when_the_host_zone_is_not_utc(
+    non_utc_local_zone: timedelta,
+) -> None:
+    """Injection stamps through the publish path's clock, so it inherits both the
+    guarantee and its blind spot: the ``Z`` assertion above holds anyway on a
+    host that is already UTC, leaving a regression to local time invisible. The
+    local zone is forced off UTC here so the injected stamp has to prove it is
+    UTC rather than merely looking like it.
+    """
+    assert non_utc_local_zone != timedelta(0), non_utc_local_zone
+
+    messenger = MockMessenger(RecordingLogger())
+    subscriber = messenger.add_subscriber("node-1")
+
+    before = datetime.now(timezone.utc)
+    messenger.inject_neoflow_message("node-1", "input1", _MOCK_FIELDS)
+    after = datetime.now(timezone.utc)
+
+    source, timestamp, _ = decode_neoflow_envelope(subscriber.get_nowait().data)
+    assert source == "mock"
+    assert timestamp.endswith("Z"), timestamp
+
+    stamped = datetime.fromisoformat(timestamp)
+    assert stamped.tzinfo == timezone.utc
+    # Lower bound is truncated because the renderer truncates to milliseconds.
+    assert before.replace(microsecond=(before.microsecond // 1000) * 1000) <= stamped <= after
 
 
 def test_injection_reports_a_field_the_config_cannot_parse() -> None:
@@ -275,10 +309,12 @@ def test_handler_receives_injected_message_with_native_values() -> None:
     assert done.wait(timeout=5.0), "handler did not observe an injected message in time"
     thread.join(timeout=2.0)
 
+    assert len(observed) == 1, observed
+    injected_timestamp = observed[0].pop("timestamp")
+    assert injected_timestamp.endswith("Z"), injected_timestamp
     assert observed == [
         {
             "source": "mock",
-            "timestamp": "",
             "handle": "input1",
             "data": {"count": 42, "ratio": 25.34},
         }

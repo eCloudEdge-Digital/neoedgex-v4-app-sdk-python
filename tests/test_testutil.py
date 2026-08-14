@@ -51,7 +51,7 @@ def test_new_message_builds_the_message_the_runtime_would_build() -> None:
     assert isinstance(message, Message)
     assert message.handle == "input1"
     assert message.source == "upstream-node"
-    assert message.timestamp == "2026-01-01T00:00:00Z"
+    assert message.timestamp == "2026-01-01T00:00:00.000Z"
     assert message.to_dict() == {"value": 42}
 
 
