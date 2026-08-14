@@ -191,6 +191,21 @@ def decode_field_with_schema(span: bytes, tag_type: DataType) -> Any:
                 return value
             if span[0] == _SINGLE_FLOAT_HEAD:
                 return restore_float32(value)
+
+    # A single-precision value reaching a STRING tag needs the same head-byte
+    # read. The widening is exact, so nothing is lost numerically, but the
+    # shortest decimal that round-trips a double needs every digit of the
+    # widened value ("25.34000015258789") while the shortest decimal that
+    # round-trips the float32 it came from is "25.34" -- both recover the wire
+    # bits, and only the second is the value the sender meant. NaN/Inf falls
+    # through to the generic path, which refuses them exactly as before.
+    if tag_type == DataType.STRING and span and span[0] == _SINGLE_FLOAT_HEAD:
+        layout = _FLOAT_HEAD_LAYOUT[_SINGLE_FLOAT_HEAD]
+        if len(span) == layout[0]:
+            value = struct.unpack(layout[1], span[1:])[0]
+            if not (math.isnan(value) or math.isinf(value)):
+                return convert_to_typed_value(restore_float32(value), tag_type)
+
     return convert_to_typed_value(decode_natural(span), tag_type)
 
 

@@ -206,6 +206,47 @@ def test_float_strings_are_fixed_point_decimal(value: float, want: str) -> None:
     assert convert_any_value(value) == (want, DataType.DOUBLE)
 
 
+def _receive(span: bytes, declared: DataType) -> Any:
+    """What a node whose input schema declares the key as ``declared`` reads
+    for one already-encoded wire value."""
+    from neoedgex.contract import Message
+
+    return Message(
+        source="upstream-node", timestamp="", handle="input1",
+        raw=b"\xa1\x61v" + span, plan={"v": declared},
+    ).to_dict()["v"]
+
+
+@pytest.mark.parametrize(
+    ("value", "want"),
+    [(25.34, "25.34"), (500.0, "500"), (0.1, "0.1"), (-2.5, "-2.5"), (3.4028235e38, "340282350000000000000000000000000000000")],
+)
+def test_single_precision_wire_value_keeps_its_width_into_a_string_tag(
+    value: float, want: str
+) -> None:
+    """A 0xfa wire value read as a string reads as the value the sender meant,
+    not the artefact of widening it to double first ("25.34", not
+    "25.34000015258789"). Both decimals recover the same wire bits; only the
+    32-bit one is what the publisher chose. Go pins the identical table."""
+    import struct
+
+    assert _receive(struct.pack("!Bf", 0xFA, value), DataType.STRING) == want
+
+
+def test_double_precision_wire_value_into_a_string_tag_is_unaffected() -> None:
+    """The companion case: a 0xfb value has no narrower identity to preserve,
+    so it stringifies from the double as it always did."""
+    import struct
+
+    assert _receive(struct.pack("!Bd", 0xFB, 25.34), DataType.STRING) == "25.34"
+    # The widened float32 spelled as a genuine double keeps every digit,
+    # because that IS the value the sender chose at 64-bit width.
+    assert (
+        _receive(struct.pack("!Bd", 0xFB, 25.340000152587890625), DataType.STRING)
+        == "25.34000015258789"
+    )
+
+
 def test_float_strings_legacy_scientific_form_still_parses() -> None:
     """A message stringified by a pre-v2.2.0-era publisher still converts:
     tightening the parse side would break old-publisher-to-new-consumer
