@@ -745,8 +745,8 @@ except Exception as err:
     </tr>
     <tr>
       <td><code>float</code></td>
-      <td>轉成 scientific notation 字串。</td>
-      <td><code>25.5 -&gt; "2.55e+01"</code></td>
+      <td>轉成定點十進位字串，取可還原回原值的最短位數；整數值不帶 <code>.0</code>，且永不切換成指數寫法。</td>
+      <td><code>25.5 -&gt; "25.5"</code></td>
     </tr>
     <tr>
       <td><code>bool</code></td>
@@ -781,7 +781,7 @@ from neoedgex import DataType, convert_to_typed_value
 assert convert_to_typed_value(9527, DataType.BOOL) is True
 assert convert_to_typed_value(12.9, DataType.INT64) == 12
 assert convert_to_typed_value("42", DataType.INT16) == 42
-assert convert_to_typed_value(25.5, DataType.STRING) == "2.55e+01"
+assert convert_to_typed_value(25.5, DataType.STRING) == "25.5"
 with pytest.raises(ValueError):
     convert_to_typed_value(70000, DataType.INT16)
 with pytest.raises(ValueError):
@@ -940,7 +940,7 @@ if __name__ == "__main__":
         "data": {
           "temperature": {
             "type": "double",
-            "value": "2.55e+01"
+            "value": "25.5"
           }
         }
       }
@@ -954,7 +954,7 @@ if __name__ == "__main__":
 - `mock.messages[].nodeID` 必須與某個 `nodes[].id` 完全相同，`handle` 也應是同一個節點在 `inputs` 中宣告過的。節點未宣告的 `handle` 仍會送達，但背後沒有 input schema，所有值都走 bypass 路徑、不帶型別。
 - 訊息每個 tick 注入一則，從清單頭開始輪替；app 啟動後約半秒開始。要同時測多個 input，就每個 input 各列一則訊息，讓它們輪流注入。
 - `messageInterval` 是 duration 字串：一至多個「數字＋單位」組合，可帶小數，單位為 `ns`、`us`、`ms`、`s`、`m`、`h`——例如 `"3s"`、`"500ms"`、`"1.5s"`、`"1m30s"`。未填、無法解析或非正值時，一律退回 3s，且不報錯。
-- 注入的值維持字串化的 `type`/`value` 形式：浮點用科學記號（`"2.55e+01"`）、`raw` 用 base64 文字、bool 用 `"true"` / `"false"`。SDK 在注入時把每筆值轉成原生值並編成真正的 CBOR 訊息，handler 讀到的解碼結果與正式環境一致。`type` 留空的欄位會注入成 undefined，這就是測試 `None` 路徑的方法。條目或 schema 欄位上殘留的舊 `format` 鍵會被容忍並忽略（釘在 `tests/test_mock.py`）。
+- 注入的值維持字串化的 `type`/`value` 形式：浮點用定點十進位字串（`"25.5"`；科學記號如 `"2.55e+01"` 亦可解析）、`raw` 用 base64 文字、bool 用 `"true"` / `"false"`。SDK 在注入時把每筆值轉成原生值並編成真正的 CBOR 訊息，handler 讀到的解碼結果與正式環境一致。`type` 留空的欄位會注入成 undefined，這就是測試 `None` 路徑的方法。條目或 schema 欄位上殘留的舊 `format` 鍵會被容忍並忽略（釘在 `tests/test_mock.py`）。
 - 注入的訊息一律帶 `source` `"mock"`，`timestamp` 則取自 publish 路徑同一個 UTC 時鐘，因此 mock 執行也看得到正式環境的格式。
 - 沒有真實 broker，因此 handler publish 的內容只看得到 log：`[MOCK PUBLISH]` 行會帶出 topic 與解碼後的 payload。heartbeat 也以同樣形式出現，payload 為空。呼叫 `disable_sdk_log()` 會把這些全部關掉。
 
@@ -1070,9 +1070,12 @@ class ExampleApp:
 
 ### v2.1.0 — 2026-08-13
 
+**本版變更資料訊息裡兩個文字值的實際內容，但不改變任何型別。** 最外層 `timestamp` 提高到毫秒精度並改以 UTC 表示；寫入 `string` 宣告 tag 的浮點值改用定點十進位，不再使用科學記號。兩者仍為 CBOR text string，原本能解析舊形式的解析器同樣能解析新形式，新舊版本節點雙向皆可交換訊息。對這些字串做精確比對、以固定長度樣式驗證、或原樣轉發至外部系統的 consumer，請依以下各條檢視。
+
 - **訊息時間戳精度到毫秒。** 最外層 `timestamp` 由整秒改為 RFC3339 帶固定三位小數（`2026-03-22T10:30:00.123Z`），因此同一秒內採樣的資料不再被寫成相同時間。次毫秒的位數採截斷而非四捨五入，且同一瞬間與 Go SDK 產生的字串逐位元組相同。欄位仍為 CBOR text string，`datetime.fromisoformat` 可讀取兩種形式，故仍以秒精度發送的節點雙向皆可互通。以固定長度樣式驗證時間戳、或以未帶 `%f` 的 `strptime` 解析的 consumer 必須調整。
-- **修正**字串轉 `float` 的捨入：改為如 Go 的 `strconv.ParseFloat(s, 32)` 一般，從字串一次直接捨入到 float32，不再經由 float64 中轉。原本的兩段捨入在字串落於捨入邊界時會選到相鄰的 float32（`"7.038531e-26"`），在 float32 溢位邊界上更可能拒絕一個 Go SDK 會接受為 MaxFloat32 的值——同一個 tag 值一端轉得過、另一端轉不過。預期結果已逐位元對照 Go 的輸出釘住；`double` 的轉換原本即為單次捨入，不受影響。
 - **Publish 的時間戳一律為 UTC。** 最外層 `timestamp` 取自 UTC 時鐘，因此結尾一律為 `Z`，不再帶容器的本地時區偏移。接收端行為不變：收到的 timestamp 原封交給 handler 且從不驗證，無論其時區或精度。Mock 模式與 `testutil` 比照 publish 形式——mock 注入的訊息帶 UTC 毫秒時間戳，不再是空字串；`testutil` 的預設訊息時間戳由 `"2026-01-01T00:00:00Z"` 改為 `"2026-01-01T00:00:00.000Z"`。假設帶本地偏移的 consumer，以及對上述任一字面值做精確比對的測試，必須調整。判斷訊息是否來自 mock，請依來源 `"mock"`，而非依時間戳為空。
+- **浮點字串改為定點十進位。** 浮點值轉入 `string` 宣告的 tag 時，publish 與接收兩側皆轉成定點十進位、取可還原回原值的最短位數：`25.34` 為 `"25.34"` 而非 `"2.534e+01"`；整數值不帶 `.0`（`500.0` 為 `"500"`）；任何量級皆不切換為指數形式。此寫法產生的字串與 Go SDK 逐位元組相同，亦與平台 formula 引擎、forwarder payload 既有的方式一致。解析側不變、兩種形式皆接受，故新舊版本節點可互通，帶科學記號值的 mock 設定檔亦照常載入。一項行為影響：經由 string tag 傳遞的整數值浮點，現在可解析進下游宣告為整數型別的 tag，而科學記號形式會被拒為 undefined——原本因此組合回報轉換錯誤的管線，現在會交付該值。以科學記號形式做樣式比對的 consumer 必須調整。
+- **修正**字串轉 `float` 的捨入：改為如 Go 的 `strconv.ParseFloat(s, 32)` 一般，從字串一次直接捨入到 float32，不再經由 float64 中轉。原本的兩段捨入在字串落於捨入邊界時會選到相鄰的 float32（`"7.038531e-26"`），在 float32 溢位邊界上更可能拒絕一個 Go SDK 會接受為 MaxFloat32 的值——同一個 tag 值一端轉得過、另一端轉不過。預期結果已逐位元對照 Go 的輸出釘住；`double` 的轉換原本即為單次捨入，不受影響。
 
 ### v2.0.0 — 2026-08-10
 

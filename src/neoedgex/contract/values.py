@@ -10,7 +10,7 @@ from ._float import (
     FloatSyntaxError,
     parse_go_float,
     shortest_float_string,
-    to_scientific_notation,
+    to_fixed_notation,
 )
 from ._limits import (
     INTEGER_TYPES,
@@ -164,7 +164,7 @@ def convert_any_value(any_value: Any) -> tuple[str, DataType]:
             return str(parsed), DataType.UINT64
         return str(parsed), DataType.INT64
     if data_type == DataType.DOUBLE:
-        return _format_scientific(float(any_value), 64), DataType.DOUBLE
+        return _format_float(float(any_value), 64), DataType.DOUBLE
     if data_type == DataType.STRING:
         return any_value, DataType.STRING
     if data_type == DataType.RAW:
@@ -225,15 +225,15 @@ def _stringify_number_for_type(value: Any, dest_type: DataType) -> str:
     if dest_type in INTEGER_TYPES:
         return str(int(value))
     if dest_type == DataType.FLOAT:
-        return _format_scientific(float(value), 32)
+        return _format_float(float(value), 32)
     if dest_type == DataType.DOUBLE:
-        return _format_scientific(float(value), 64)
+        return _format_float(float(value), 64)
     raise ValueError(f"internal error: unsupported destination type '{dest_type.value}'")
 
 
-def _format_scientific(value: float, bits: int) -> str:
+def _format_float(value: float, bits: int) -> str:
     if math.isnan(value):
         return "NaN"
     if math.isinf(value):
         return "+Inf" if value > 0 else "-Inf"
-    return to_scientific_notation(shortest_float_string(value, bits))
+    return to_fixed_notation(shortest_float_string(value, bits))

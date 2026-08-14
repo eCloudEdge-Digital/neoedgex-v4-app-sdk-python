@@ -182,6 +182,38 @@ def test_string_to_integer_accepts_go_strconv_shapes() -> None:
         convert_to_typed_value("32768", DataType.INT16)
 
 
+# The canonical float string form: fixed-point decimal at shortest round-trip
+# precision, never switching to an exponent, integer-valued floats without
+# ".0", negative zero keeping its sign. The Go SDK pins the identical table
+# (TestConvertAnyValueFloatsAreFixedPointDecimal), so the two SDKs cannot
+# drift apart; expectations equal Go strconv.FormatFloat(v, 'f', -1, 64).
+@pytest.mark.parametrize(
+    ("value", "want"),
+    [
+        (25.34, "25.34"),
+        (500.0, "500"),
+        (0.0, "0"),
+        (-0.0, "-0"),
+        (0.000123, "0.000123"),
+        (1e-7, "0.0000001"),
+        (1e21, "1000000000000000000000"),
+        (-2.5, "-2.5"),
+        (1234567.0, "1234567"),
+    ],
+)
+def test_float_strings_are_fixed_point_decimal(value: float, want: str) -> None:
+    assert convert_to_typed_value(value, DataType.STRING) == want
+    assert convert_any_value(value) == (want, DataType.DOUBLE)
+
+
+def test_float_strings_legacy_scientific_form_still_parses() -> None:
+    """A message stringified by a pre-v2.2.0-era publisher still converts:
+    tightening the parse side would break old-publisher-to-new-consumer
+    traffic."""
+    assert convert_to_typed_value("2.534e+01", DataType.DOUBLE) == 25.34
+    assert convert_to_typed_value("1.5e+00", DataType.FLOAT) == 1.5
+
+
 @pytest.mark.parametrize("text", [" 5", "abc", "", "1.2.3"])
 def test_string_to_float_parsing_is_strict(text: str) -> None:
     with pytest.raises(ValueError, match="invalid syntax"):
@@ -335,7 +367,7 @@ def test_number_to_bool_is_nonzero() -> None:
 def test_number_to_string_uses_go_formatting() -> None:
     assert convert_to_typed_value(5, DataType.STRING) == "5"
     assert convert_to_typed_value(-12345, DataType.STRING) == "-12345"
-    assert convert_to_typed_value(25.34, DataType.STRING) == "2.534e+01"
+    assert convert_to_typed_value(25.34, DataType.STRING) == "25.34"
 
 
 def test_raw_only_converts_to_raw() -> None:
@@ -403,8 +435,8 @@ def test_new_with_string_validates_against_the_declared_type() -> None:
 
 def test_new_with_any_converts_then_stringifies() -> None:
     assert PortFieldData.new_with_any(42, DataType.INT64).value == "42"
-    assert PortFieldData.new_with_any(25.5, DataType.DOUBLE).value == "2.55e+01"
-    assert PortFieldData.new_with_any(25.34, DataType.FLOAT).value == "2.534e+01"
+    assert PortFieldData.new_with_any(25.5, DataType.DOUBLE).value == "25.5"
+    assert PortFieldData.new_with_any(25.34, DataType.FLOAT).value == "25.34"
     assert PortFieldData.new_with_any(True, DataType.INT32).value == "1"
     assert PortFieldData.new_with_any(b"hello", DataType.RAW).value == "aGVsbG8="
     with pytest.raises(ValueError, match="nil value is not supported"):
@@ -477,18 +509,18 @@ def test_convert_to_string_renormalizes_numbers() -> None:
     assert PortFieldData(DataType.INT16, "0025").convert_to(DataType.STRING).value == "25"
     assert (
         PortFieldData(DataType.DOUBLE, "2.534e+01").convert_to(DataType.STRING).value
-        == "2.534e+01"
+        == "25.34"
     )
     assert PortFieldData(DataType.BOOL, "true").convert_to(DataType.STRING).value == "true"
 
 
 def test_convert_to_number_and_bool_destinations() -> None:
-    assert PortFieldData(DataType.INT16, "25").convert_to(DataType.DOUBLE).value == "2.5e+01"
-    assert PortFieldData(DataType.INT16, "25").convert_to(DataType.FLOAT).value == "2.5e+01"
-    assert PortFieldData(DataType.STRING, "2.5e1").convert_to(DataType.DOUBLE).value == "2.5e+01"
+    assert PortFieldData(DataType.INT16, "25").convert_to(DataType.DOUBLE).value == "25"
+    assert PortFieldData(DataType.INT16, "25").convert_to(DataType.FLOAT).value == "25"
+    assert PortFieldData(DataType.STRING, "2.5e1").convert_to(DataType.DOUBLE).value == "25"
     assert PortFieldData(DataType.STRING, "25").convert_to(DataType.INT16).value == "25"
     assert PortFieldData(DataType.BOOL, "true").convert_to(DataType.INT32).value == "1"
-    assert PortFieldData(DataType.BOOL, "false").convert_to(DataType.DOUBLE).value == "0e+00"
+    assert PortFieldData(DataType.BOOL, "false").convert_to(DataType.DOUBLE).value == "0"
     assert PortFieldData(DataType.DOUBLE, "2.9e+01").convert_to(DataType.INT16).value == "29"
     assert PortFieldData(DataType.INT16, "0").convert_to(DataType.BOOL).value == "false"
     assert PortFieldData(DataType.INT16, "5").convert_to(DataType.BOOL).value == "true"
@@ -612,8 +644,8 @@ def test_c5_a_float_out_of_range_says_both_what_failed_and_why() -> None:
 def test_convert_any_value_detects_the_wire_type() -> None:
     assert convert_any_value(True) == ("true", DataType.BOOL)
     assert convert_any_value(42) == ("42", DataType.INT64)
-    assert convert_any_value(25.5) == ("2.55e+01", DataType.DOUBLE)
-    assert convert_any_value(1e300) == ("1e+300", DataType.DOUBLE)
+    assert convert_any_value(25.5) == ("25.5", DataType.DOUBLE)
+    assert convert_any_value(1e300) == ("1" + "0" * 300, DataType.DOUBLE)
     assert convert_any_value("neoedgex") == ("neoedgex", DataType.STRING)
     assert convert_any_value(b"hello") == ("aGVsbG8=", DataType.RAW)
 

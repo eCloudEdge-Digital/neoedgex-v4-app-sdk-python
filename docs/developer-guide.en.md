@@ -747,8 +747,8 @@ except Exception as err:
     </tr>
     <tr>
       <td><code>float</code></td>
-      <td>Converted to scientific-notation strings.</td>
-      <td><code>25.5 -&gt; "2.55e+01"</code></td>
+      <td>Converted to fixed-point decimal strings, using the shortest decimal that restores the same value; integer-valued floats carry no <code>.0</code> and the notation never switches to an exponent.</td>
+      <td><code>25.5 -&gt; "25.5"</code></td>
     </tr>
     <tr>
       <td><code>bool</code></td>
@@ -783,7 +783,7 @@ from neoedgex import DataType, convert_to_typed_value
 assert convert_to_typed_value(9527, DataType.BOOL) is True
 assert convert_to_typed_value(12.9, DataType.INT64) == 12
 assert convert_to_typed_value("42", DataType.INT16) == 42
-assert convert_to_typed_value(25.5, DataType.STRING) == "2.55e+01"
+assert convert_to_typed_value(25.5, DataType.STRING) == "25.5"
 with pytest.raises(ValueError):
     convert_to_typed_value(70000, DataType.INT16)
 with pytest.raises(ValueError):
@@ -942,7 +942,7 @@ Minimal mock config shape:
         "data": {
           "temperature": {
             "type": "double",
-            "value": "2.55e+01"
+            "value": "25.5"
           }
         }
       }
@@ -956,7 +956,7 @@ What that file has to get right:
 - `mock.messages[].nodeID` must be exactly one of the `nodes[].id` values, and `handle` should be one the same node declares under `inputs`. A `handle` the node does not declare still delivers, but with no input schema behind it, so every value arrives untyped over the bypass path.
 - messages are injected one per tick, cycling through the list from the top and starting about half a second after the app comes up. To exercise several inputs, list one message per input and let them rotate.
 - `messageInterval` is a duration string: one or more number-plus-unit tokens, decimals allowed, with units `ns`, `us`, `ms`, `s`, `m`, `h` — such as `"3s"`, `"500ms"`, `"1.5s"` or `"1m30s"`. Missing, unparseable, or not positive falls back to 3s, with no error.
-- injected values keep the stringified `type`/`value` form: floats in scientific notation (`"2.55e+01"`), `raw` as base64 text, bool as `"true"` / `"false"`. The SDK converts each entry to its native value at injection time and encodes a real CBOR message, so the handler sees the same decoded values as in production. An entry with an empty `type` injects an undefined field, which is how you exercise the `None` path. A legacy `format` key on an entry or a schema field is tolerated and ignored (pinned in `tests/test_mock.py`).
+- injected values keep the stringified `type`/`value` form: floats as fixed-point decimal strings (`"25.5"`; scientific notation such as `"2.55e+01"` also parses), `raw` as base64 text, bool as `"true"` / `"false"`. The SDK converts each entry to its native value at injection time and encodes a real CBOR message, so the handler sees the same decoded values as in production. An entry with an empty `type` injects an undefined field, which is how you exercise the `None` path. A legacy `format` key on an entry or a schema field is tolerated and ignored (pinned in `tests/test_mock.py`).
 - every injected message arrives with `source` `"mock"` and a `timestamp` stamped from the same UTC clock the publish path uses, so mock runs see the production shape.
 - there is no broker, so what your handler publishes is visible only in the log, as `[MOCK PUBLISH]` lines carrying the topic and the decoded payload. Heartbeats appear the same way, with an empty payload. `disable_sdk_log()` hides all of it.
 
@@ -1072,9 +1072,12 @@ This SDK follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Mos
 
 ### v2.1.0 — 2026-08-13
 
+**This release changes the exact text of two values in a data message, without changing any type.** The envelope `timestamp` gains millisecond precision and is written in UTC. A float value rendered into a `string`-declared tag is written in fixed-point decimal instead of scientific notation. Both remain CBOR text strings, every parser that accepted the old form accepts the new one, and nodes on either version exchange messages in both directions. Consumers that compare these strings exactly, validate them against a fixed-length pattern, or forward them verbatim to an external system should be reviewed against the entries below.
+
 - **Millisecond message timestamps.** The envelope `timestamp` is RFC3339 with a fixed three-digit fraction (`2026-03-22T10:30:00.123Z`) instead of whole seconds, so samples taken within the same second are no longer written as the same time. Sub-millisecond digits are truncated rather than rounded, and the rendering is byte-identical to the Go SDK's for the same instant. The field remains a CBOR text string and `datetime.fromisoformat` reads both forms, so a node still publishing second-precision stamps interoperates in both directions. Consumers that validate the stamp against a fixed-length pattern, or parse it with `strptime` without `%f`, must be updated.
-- **Fixed** string-to-`float` conversion to round the text directly to float32, as Go's `strconv.ParseFloat(s, 32)` does, instead of narrowing through float64. The double rounding could select the adjacent float32 when the text sits on a rounding boundary (`"7.038531e-26"`), and at the float32 overflow boundary could reject a value the Go SDK accepts as MaxFloat32 — the same tag value converting on one SDK and failing on the other. Expected results are pinned bit-for-bit against Go output; `double` conversions were always single-rounded and are unchanged.
 - **Publish timestamps are always UTC.** The envelope `timestamp` is taken in UTC and therefore always ends in `Z`, instead of carrying the container's local offset. Receiving is unchanged: an inbound timestamp is delivered to the handler verbatim and never validated, whatever zone or precision it carries. Mock mode and `testutil` follow the publish form — a mock-injected message carries a UTC millisecond stamp instead of an empty string, and `testutil`'s default message timestamp is now `"2026-01-01T00:00:00.000Z"` rather than `"2026-01-01T00:00:00Z"`. Consumers that assume a local offset, and tests that compare either literal exactly, must be updated. Detect a mock-injected message by its source `"mock"` rather than by an empty timestamp.
+- **Fixed-point decimal float strings.** A float value converted to a `string`-declared tag, on publish and on receive alike, is rendered in fixed-point decimal, using the shortest decimal that restores the same value: `25.34` becomes `"25.34"` rather than `"2.534e+01"`, an integer-valued float carries no `.0` (`500.0` becomes `"500"`), and the notation does not switch to an exponent at any magnitude. The rendering is byte-identical to the Go SDK's and matches what the platform's formula engine and forwarder payloads already produce. The parse side is unchanged and accepts both forms, so nodes on either version interoperate and mock configuration files holding scientific-notation values continue to load. One consequence: an integer-valued float sent through a string tag now parses into a downstream tag declared as an integer type, where the scientific form was rejected as undefined, so a pipeline that reported a conversion error for that combination now delivers the value. Consumers that match the scientific form must be updated.
+- **Fixed** string-to-`float` conversion to round the text directly to float32, as Go's `strconv.ParseFloat(s, 32)` does, instead of narrowing through float64. The double rounding could select the adjacent float32 when the text sits on a rounding boundary (`"7.038531e-26"`), and at the float32 overflow boundary could reject a value the Go SDK accepts as MaxFloat32 — the same tag value converting on one SDK and failing on the other. Expected results are pinned bit-for-bit against Go output; `double` conversions were always single-rounded and are unchanged.
 
 ### v2.0.0 — 2026-08-10
 

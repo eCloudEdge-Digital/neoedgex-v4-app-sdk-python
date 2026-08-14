@@ -176,7 +176,12 @@ def shortest_float_string(value: float, bits: int) -> str:
     return format(value, f".{max_precision}g")
 
 
-def to_scientific_notation(value: str) -> str:
+def to_fixed_notation(value: str) -> str:
+    """Expand a decimal string (exponent form included) to fixed-point
+    notation, digits preserved — Go's 'f' verb applied to a shortest-form
+    mantissa. The notation never switches to an exponent, so "1e+21" spells
+    out all 22 digits, matching the platform's formula engine and forwarder
+    payload rendering."""
     sign = ""
     if value.startswith(("+", "-")):
         sign = "-" if value[0] == "-" else ""
@@ -184,34 +189,23 @@ def to_scientific_notation(value: str) -> str:
 
     exponent = 0
     if "e" in value or "E" in value:
-        mantissa_part, exponent_part = re.split(r"[eE]", value, maxsplit=1)
+        mantissa, exponent_part = re.split(r"[eE]", value, maxsplit=1)
         exponent = int(exponent_part)
     else:
-        mantissa_part = value
+        mantissa = value
 
-    if "." in mantissa_part:
-        integer, fractional = mantissa_part.split(".", 1)
-    else:
-        integer, fractional = mantissa_part, ""
-
-    digits = integer + fractional
+    integer, _, fraction = mantissa.partition(".")
+    digits = integer + fraction
     if not digits or set(digits) == {"0"}:
-        return f"{sign}0e+00"
+        return f"{sign}0"
 
-    first_non_zero = next(index for index, char in enumerate(digits) if char != "0")
-    digits = digits[first_non_zero:]
+    point = len(integer) + exponent
+    stripped = digits.lstrip("0")
+    point -= len(digits) - len(stripped)
+    digits = stripped
 
-    if integer and any(char != "0" for char in integer):
-        normalized_exponent = exponent + len(integer.lstrip("0")) - 1
-    else:
-        leading_fractional_zeros = len(fractional) - len(fractional.lstrip("0"))
-        normalized_exponent = exponent - leading_fractional_zeros - 1
-
-    mantissa = digits[0]
-    tail = digits[1:].rstrip("0")
-    if tail:
-        mantissa = f"{mantissa}.{tail}"
-
-    exponent_sign = "+" if normalized_exponent >= 0 else "-"
-    exponent_value = str(abs(normalized_exponent)).zfill(2)
-    return f"{sign}{mantissa}e{exponent_sign}{exponent_value}"
+    if point <= 0:
+        return sign + "0." + "0" * (-point) + digits
+    if point >= len(digits):
+        return sign + digits + "0" * (point - len(digits))
+    return f"{sign}{digits[:point]}.{digits[point:]}"

@@ -1,7 +1,7 @@
 {
   "generated_by": "NEO-7688 fixturegen (scratch tool, not versioned; see regen)",
   "go_sdk": "neoedgex-v4-app-sdk-go v2.1.0 (bdfcd09)",
-  "regen": "write this generator into a scratch dir with go.mod replace -\u003e local Go SDK checkout at v2.1.0, then: go mod tidy \u0026\u0026 go run . \u003e neoflow_v2_1_0.json",
+  "regen": "write this generator into a scratch dir with go.mod replace -> local Go SDK checkout at v2.1.0, then: go mod tidy && go run . > neoflow_v2_1_0.json",
   "envelope": {
     "source": "node-a",
     "timestamp": "2026-03-31T09:10:11Z",
@@ -332,7 +332,7 @@
       "declared": "string",
       "expect": {
         "kind": "string",
-        "value": "2.534e+01"
+        "value": "25.34"
       }
     },
     {
@@ -341,7 +341,7 @@
       "declared": "string",
       "expect": {
         "kind": "string",
-        "value": "2.534000015258789e+01"
+        "value": "25.34000015258789"
       }
     },
     {
@@ -934,8 +934,8 @@
       "declared": "string",
       "in_kind": "float",
       "in_value": "25.34",
-      "expect_hex": "69322e353334652b3031",
-      "note": "scientific shortest form, e.g. 2.534e+01"
+      "expect_hex": "6532352e3334",
+      "note": "fixed-point shortest form since v2.2.0 canonical float strings, e.g. 25.34; pre-v2.2.0 published 2.534e+01"
     },
     {
       "name": "bool_into_string",
@@ -989,5 +989,6 @@
       "py_only": true,
       "note": "Python-only: source int outside [MinInt64, MaxUint64] has no schema type; reject, never emit CBOR bignum"
     }
-  ]
+  ],
+  "note": "Rows f64_into_string / f32_into_string / float_into_string_sci carry v2.2.0 expectations: the float-to-string conversion moved from scientific to fixed-point notation, so their expect values are Go v2.2.0 output (verified against the local Go SDK), not v2.1.0's."
 }

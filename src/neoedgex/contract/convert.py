@@ -11,7 +11,7 @@ from ._float import (
     parse_go_float,
     restore_float32,
     shortest_float_string,
-    to_scientific_notation,
+    to_fixed_notation,
 )
 from ._limits import (
     INTEGER_TYPES,
@@ -162,5 +162,5 @@ def _convert_to_string(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, float):
-        return to_scientific_notation(shortest_float_string(value, 64))
+        return to_fixed_notation(shortest_float_string(value, 64))
     return str(value)

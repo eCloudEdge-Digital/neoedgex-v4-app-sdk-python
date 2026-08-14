@@ -228,7 +228,7 @@ def test_conversion_table_rows() -> None:
     assert convert_to_typed_value(9527, DataType.BOOL) is True
     assert convert_to_typed_value(12.9, DataType.INT64) == 12
     assert convert_to_typed_value("42", DataType.INT16) == 42
-    assert convert_to_typed_value(25.5, DataType.STRING) == "2.55e+01"
+    assert convert_to_typed_value(25.5, DataType.STRING) == "25.5"
     with pytest.raises(ValueError):
         convert_to_typed_value(70000, DataType.INT16)
     with pytest.raises(ValueError):
@@ -274,7 +274,7 @@ GUIDE_MOCK_CONFIG = """\
         "data": {
           "temperature": {
             "type": "double",
-            "value": "2.55e+01"
+            "value": "25.5"
           }
         }
       }
@@ -303,4 +303,4 @@ def test_minimal_mock_config_loads(tmp_path: Path) -> None:
     message = config.mock.messages[0]
     assert (message.node_id, message.handle) == ("node-1", "input1")
     assert message.data["temperature"].type == DataType.DOUBLE
-    assert message.data["temperature"].value == "2.55e+01"
+    assert message.data["temperature"].value == "25.5"
