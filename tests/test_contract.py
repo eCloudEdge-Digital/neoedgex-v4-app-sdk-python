@@ -211,6 +211,62 @@ def test_string_nan_and_inf_are_refused(text: str) -> None:
         convert_to_typed_value(text, DataType.DOUBLE)
 
 
+# Texts whose float64 value lands exactly on a float32 rounding boundary,
+# where narrowing through float64 (double rounding) picks the wrong float32.
+# Go's ParseFloat(s, 32) rounds the text once, directly to float32; the
+# expected bit patterns below are Go's output, cross-checked bit-for-bit
+# against `strconv` via the Go SDK's ConvertToTypedValue.
+@pytest.mark.parametrize(
+    ("text", "want_bits"),
+    [
+        # boundary between 1.0 and its float32 successor: the text is just
+        # above it, but ties-to-even on the float64 boundary value goes down.
+        ("1.000000059604644830901776231", 0x3F800001),
+        # mirrored direction: lower neighbor odd, ties-to-even goes up while
+        # the text is just below the boundary.
+        ("1.000000178813934270660723769", 0x3F800001),
+        # the classic double-rounding example, 7 significant digits.
+        ("7.038531e-26", 0x15AE43FD),
+        # a text spelling a boundary exactly IS a tie: half-to-even applies.
+        ("1.000000059604644775390625", 0x3F800000),
+        # boundary between zero and the smallest subnormal float32.
+        ("7.006492321624085743557102783E-46", 0x00000001),
+        # sign travels with the corrected rounding.
+        ("-7.038531e-26", 0x95AE43FD),
+    ],
+)
+def test_string_to_float32_rounds_the_text_once(text: str, want_bits: int) -> None:
+    from neoedgex.contract._float import float32_bits
+
+    assert float32_bits(convert_to_typed_value(text, DataType.FLOAT)) == want_bits
+
+
+def test_string_to_float32_overflow_boundary_matches_go() -> None:
+    """The float32 overflow cut sits at the midpoint between MaxFloat32 and
+    2^128. A text below it whose float64 lands exactly on the midpoint must
+    round down to MaxFloat32 the way Go does — rejecting it is a
+    convert-succeeds-on-one-SDK-only divergence, worse than a wrong last bit.
+    At or above the midpoint both SDKs refuse."""
+    from neoedgex.contract._float import float32_bits
+
+    below = "3.402823567797336521928064297E+38"
+    assert float32_bits(convert_to_typed_value(below, DataType.FLOAT)) == 0x7F7FFFFF
+    with pytest.raises(ValueError, match="out of range"):
+        convert_to_typed_value("3.402823567797336710822723612E+38", DataType.FLOAT)
+
+
+def test_hex_float_text_to_float32_also_rounds_once() -> None:
+    """The exact-value comparison must read Go hex-float syntax too.
+    0x1.5c87fb0000000p-84 is the float32 boundary "7.038531e-26" sits just
+    below; the extra low mantissa bit spells boundary + 2^-136, which is
+    above it, so the correct rounding is the upper neighbor — the opposite
+    side from the decimal case. Expectation is Go ParseFloat output."""
+    from neoedgex.contract._float import float32_bits
+
+    above = "0x1.5c87fb0000001p-84"
+    assert float32_bits(convert_to_typed_value(above, DataType.FLOAT)) == 0x15AE43FE
+
+
 @pytest.mark.parametrize(
     "dest", [DataType.DOUBLE, DataType.FLOAT, DataType.INT64, DataType.STRING, DataType.BOOL]
 )

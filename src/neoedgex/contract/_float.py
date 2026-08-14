@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 import re
 import struct
+from decimal import Decimal
+from fractions import Fraction
 
 
 class FloatSyntaxError(ValueError):
@@ -48,10 +50,76 @@ def parse_go_float(value: str, bits: int) -> float:
     if math.isinf(parsed):
         raise FloatRangeError("value out of range")
     if bits == 32:
-        if float32_out_of_range(parsed):
-            raise FloatRangeError("value out of range")
-        return restore_float32(parsed)
+        return _narrow_text_to_float32(text, parsed)
     return parsed
+
+
+# The float32 finite ceiling and the overflow boundary ParseFloat(s, 32)
+# rounds against: a magnitude below the midpoint between MaxFloat32 and 2^128
+# rounds down to MaxFloat32, at or above it overflows. Both constants are
+# exact float64 values — the magnitudes of two adjacent float32 lattice
+# points sum in 25 significant bits.
+_MAX_FLOAT32 = struct.unpack("!f", struct.pack("!I", 0x7F7FFFFF))[0]
+_FLOAT32_OVERFLOW_MIDPOINT = (_MAX_FLOAT32 + 2.0**128) / 2.0
+
+
+def _narrow_text_to_float32(text: str, parsed: float) -> float:
+    # Go's ParseFloat(s, 32) rounds the text ONCE, directly to float32.
+    # ``parsed`` has already been rounded to float64, and narrowing that
+    # rounds a second time — double rounding, which picks the wrong
+    # float32 exactly when the float64 landed on a float32 rounding
+    # boundary and the tie-break disagrees with the side the text is
+    # really on ("7.038531e-26" must give bits 0x15ae43fd, not ..fe).
+    # Every float32 boundary is exactly representable in float64, so the
+    # collisions are exactly detectable, and only there is the text's
+    # exact value consulted.
+    magnitude, sign = abs(parsed), math.copysign(1.0, parsed)
+
+    if float32_out_of_range(parsed):
+        # The one recoverable overflow: the float64 sits exactly on the
+        # overflow boundary but the text is below it — Go rounds down to
+        # MaxFloat32.
+        if magnitude == _FLOAT32_OVERFLOW_MIDPOINT and _exact_magnitude(
+            text
+        ) < Fraction(_FLOAT32_OVERFLOW_MIDPOINT):
+            return math.copysign(restore_float32(_MAX_FLOAT32), sign)
+        raise FloatRangeError("value out of range")
+
+    rounded = round_float32(magnitude)
+    if rounded != magnitude:
+        neighbor = _adjacent_float32_magnitude(rounded, magnitude)
+        if magnitude == (rounded + neighbor) / 2:
+            exact, boundary = _exact_magnitude(text), Fraction(magnitude)
+            if exact > boundary:
+                rounded = max(rounded, neighbor)
+            elif exact < boundary:
+                rounded = min(rounded, neighbor)
+            # exact == boundary is a true tie: round-half-to-even already
+            # picked ``rounded``.
+    return math.copysign(restore_float32(rounded), sign)
+
+
+def _adjacent_float32_magnitude(rounded: float, magnitude: float) -> float:
+    # The float32 lattice point on the other side of ``magnitude``, as its
+    # widened float64. Both arguments are non-negative and rounded is finite,
+    # so stepping the bit pattern by one walks the lattice, zero included
+    # (bits(0.0) + 1 is the smallest subnormal).
+    bits = struct.unpack("!I", struct.pack("!f", rounded))[0]
+    bits += 1 if magnitude > rounded else -1
+    return struct.unpack("!f", struct.pack("!I", bits))[0]
+
+
+def _exact_magnitude(text: str) -> Fraction:
+    # The exact value spelled by an (underscore-free) unsigned-or-signed
+    # numeric text, decimal or Go hex-float form.
+    body = text.lstrip("+-")
+    if body[:2].lower() == "0x":
+        mantissa, exponent = re.split("[pP]", body[2:], maxsplit=1)
+        integer, _, fraction = mantissa.partition(".")
+        whole = int(integer, 16) if integer else 0
+        part = Fraction(int(fraction, 16), 16 ** len(fraction)) if fraction else Fraction(0)
+        return (whole + part) * Fraction(2) ** int(exponent)
+    return Fraction(Decimal(body))
 
 
 def float32_out_of_range(value: float) -> bool:

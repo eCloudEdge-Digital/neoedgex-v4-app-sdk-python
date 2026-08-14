@@ -1073,6 +1073,7 @@ This SDK follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Mos
 ### v2.1.0 — 2026-08-13
 
 - **Millisecond message timestamps.** The envelope `timestamp` is RFC3339 with a fixed three-digit fraction (`2026-03-22T10:30:00.123Z`) instead of whole seconds, so samples taken within the same second are no longer written as the same time. Sub-millisecond digits are truncated rather than rounded, and the rendering is byte-identical to the Go SDK's for the same instant. The field remains a CBOR text string and `datetime.fromisoformat` reads both forms, so a node still publishing second-precision stamps interoperates in both directions. Consumers that validate the stamp against a fixed-length pattern, or parse it with `strptime` without `%f`, must be updated.
+- **Fixed** string-to-`float` conversion to round the text directly to float32, as Go's `strconv.ParseFloat(s, 32)` does, instead of narrowing through float64. The double rounding could select the adjacent float32 when the text sits on a rounding boundary (`"7.038531e-26"`), and at the float32 overflow boundary could reject a value the Go SDK accepts as MaxFloat32 — the same tag value converting on one SDK and failing on the other. Expected results are pinned bit-for-bit against Go output; `double` conversions were always single-rounded and are unchanged.
 
 ### v2.0.0 — 2026-08-10
 
