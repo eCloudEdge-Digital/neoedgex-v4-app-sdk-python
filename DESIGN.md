@@ -134,5 +134,5 @@ The default runtime mount path is `/opt/neoedgex`.
 Expected files:
 
 - `config/config.json`: node config array
-- `config/messenger.json`: messenger username/password
+- `config/messenger.json`: messenger username/password, plus optional agent-written `host`/`port` for host-network apps (each key falls back independently: absent/empty host → `neoedgex-messenger`, absent/0 port → `1883`)
 - `common/parameters.json`: documented platform file, not currently consumed by runtime

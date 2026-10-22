@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 import queue
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from neoedgex._internal.messenger import MQTTMessenger, _is_success_reason_code
+from neoedgex._internal.sdk import SDK
 from neoedgex.contract import MessengerConfig, MessengerOptions, RawMessengerPayload
 
 
@@ -383,3 +387,123 @@ def test_connect_callback_is_invoked_after_successful_retry() -> None:
 
     assert client._connected is True
     assert client._connected_event.is_set()
+
+
+# -----------------------------------------------------------------------------
+# messenger.json host / port (host-network apps): each key independently
+# overrides the neoedgex-messenger:1883 default only when set, as the Go SDK.
+# -----------------------------------------------------------------------------
+
+
+def _initialize_from(tmp_path: Path, messenger_payload: dict[str, Any]) -> MQTTMessenger:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.json").write_text("[]", encoding="utf-8")
+    (config_dir / "messenger.json").write_text(json.dumps(messenger_payload), encoding="utf-8")
+    sdk = SDK(log_enabled=False)
+    try:
+        sdk.initialize(mount_path=tmp_path)
+    finally:
+        sdk._restore_signal_handlers()
+    messenger = sdk.messenger()
+    assert isinstance(messenger, MQTTMessenger)
+    return messenger
+
+
+def test_messenger_config_from_dict_reads_host_and_port() -> None:
+    config = MessengerConfig.from_dict(
+        {"username": "app-user", "password": "s3cret", "host": "127.0.0.1", "port": 55002}
+    )
+
+    assert config.username == "app-user"
+    assert config.password == "s3cret"
+    assert config.host == "127.0.0.1"
+    assert config.port == 55002
+
+
+def test_messenger_config_from_dict_defaults_absent_host_and_port() -> None:
+    config = MessengerConfig.from_dict({"username": "app-user", "password": "s3cret"})
+
+    assert config.username == "app-user"
+    assert config.password == "s3cret"
+    assert config.host == ""
+    assert config.port == 0
+
+
+def test_messenger_config_from_dict_treats_null_host_and_port_as_unset() -> None:
+    config = MessengerConfig.from_dict(
+        {"username": "app-user", "password": "s3cret", "host": None, "port": None}
+    )
+
+    assert config.username == "app-user"
+    assert config.password == "s3cret"
+    assert config.host == ""
+    assert config.port == 0
+
+
+def test_messenger_config_from_dict_ignores_unknown_keys() -> None:
+    config = MessengerConfig.from_dict(
+        {
+            "username": "app-user",
+            "password": "s3cret",
+            "host": "127.0.0.1",
+            "port": 55002,
+            "tls": True,
+            "clientId": "ignored",
+        }
+    )
+
+    assert config == MessengerConfig(
+        username="app-user", password="s3cret", host="127.0.0.1", port=55002
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "want_broker", "want_port"),
+    [
+        pytest.param({"host": "127.0.0.1", "port": 55002}, "127.0.0.1", 55002, id="host-and-port"),
+        pytest.param({}, "neoedgex-messenger", 1883, id="neither"),
+        pytest.param({"host": "127.0.0.1", "port": 0}, "127.0.0.1", 1883, id="host-port-zero"),
+        pytest.param({"host": "", "port": 55002}, "neoedgex-messenger", 55002, id="empty-host-port"),
+        pytest.param({"host": None, "port": None}, "neoedgex-messenger", 1883, id="null-values"),
+    ],
+)
+def test_initialize_resolves_broker_address_from_messenger_json(
+    tmp_path: Path, payload: dict[str, Any], want_broker: str, want_port: int
+) -> None:
+    messenger = _initialize_from(
+        tmp_path, {"username": "app-user", "password": "s3cret", **payload}
+    )
+
+    assert messenger._options.broker == want_broker
+    assert messenger._options.port == want_port
+    assert messenger._options.config is not None
+    assert messenger._options.config.username == "app-user"
+    assert messenger._options.config.password == "s3cret"
+
+
+def test_initialize_connects_to_the_messenger_json_address(tmp_path: Path) -> None:
+    class RecordingMQTTClient(FakeMQTTClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.credentials: tuple[str, str] | None = None
+            self.target: tuple[str, int] | None = None
+
+        def username_pw_set(self, username: str, password: str) -> None:
+            self.credentials = (username, password)
+
+        def connect(self, broker: str, port: int, keepalive: int = 60) -> None:
+            self.target = (broker, port)
+            super().connect(broker, port, keepalive)
+
+    messenger = _initialize_from(
+        tmp_path,
+        {"username": "app-user", "password": "s3cret", "host": "127.0.0.1", "port": 55002},
+    )
+    fake = RecordingMQTTClient()
+    messenger._mqtt_client_factory = lambda: fake
+    messenger.connect()
+    messenger.disconnect()
+
+    assert fake.target == ("127.0.0.1", 55002)
+    assert fake.credentials == ("app-user", "s3cret")

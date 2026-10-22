@@ -351,12 +351,17 @@ class NeoFlowStatus:
 class MessengerConfig:
     username: str = ""
     password: str = ""
+    # Agent-written only for host-network apps; empty / 0 keeps the MessengerOptions default.
+    host: str = ""
+    port: int = 0
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "MessengerConfig":
         return cls(
             username=str(payload.get("username", "")),
             password=str(payload.get("password", "")),
+            host=str(payload.get("host") or ""),
+            port=int(payload.get("port") or 0),
         )
 
 

@@ -55,7 +55,12 @@ class SDK:
 
         self._node_configs = [Node.from_dict(item) for item in node_payload]
         messenger_config = MessengerConfig.from_dict(messenger_payload)
-        self._messenger = MQTTMessenger(self, MessengerOptions(config=messenger_config))
+        options = MessengerOptions(config=messenger_config)
+        if messenger_config.host:
+            options.broker = messenger_config.host
+        if messenger_config.port:
+            options.port = messenger_config.port
+        self._messenger = MQTTMessenger(self, options)
 
     def enable_mock(self, config: MockConfig) -> None:
         self._node_configs = list(config.nodes)

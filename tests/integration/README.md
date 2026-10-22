@@ -1,8 +1,9 @@
 # Real-broker integration test (Go SDK v2.1.0 ↔ Python SDK 2.1.0)
 
 Runs both SDKs against a real mosquitto broker over the full production path:
-config files mounted at `/opt/neoedgex/config`, the hard-wired broker name
-`neoedgex-messenger:1883` resolved via a docker network alias, and the NeoFlow
+config files mounted at `/opt/neoedgex/config`, the default broker address
+`neoedgex-messenger:1883` (the fixture `messenger.json` carries no `host`/`port`)
+resolved via a docker network alias, and the NeoFlow
 engine's out→in routing played by a host-side bridge. **Not collected by
 pytest** — run it manually.
 
